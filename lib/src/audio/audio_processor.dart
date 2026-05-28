@@ -38,10 +38,17 @@ class AudioProcessor {
   }
 
   static AudioBuffer _parseWavBytes(Uint8List bytes) {
+    if (bytes.length < 44) {
+      throw FormatException('WAV file too small: ${bytes.length} bytes (need at least 44)');
+    }
     final channels = bytes[22] | (bytes[23] << 8);
     final sampleRate = bytes[24] | (bytes[25] << 8) | (bytes[26] << 16) | (bytes[27] << 24);
     final bitsPerSample = bytes[34] | (bytes[35] << 8);
-    final headerSize = 44;
+    const headerSize = 44;
+
+    if (channels == 0 || sampleRate == 0) {
+      throw FormatException('Invalid WAV header (channels=$channels, rate=$sampleRate)');
+    }
 
     final samples = <double>[];
     if (bitsPerSample == 16) {
@@ -53,6 +60,9 @@ class AudioProcessor {
       for (int i = headerSize; i < bytes.length; i += channels) {
         samples.add((bytes[i] - 128) / 128.0);
       }
+    }
+    if (samples.isEmpty) {
+      throw FormatException('No audio samples found in WAV file');
     }
     return AudioBuffer(samples: Float32List.fromList(samples), sampleRate: sampleRate);
   }
