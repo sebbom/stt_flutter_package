@@ -1,11 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import 'model_registry.dart';
 import 'model_downloader.dart';
 import 'stt_result.dart';
-import 'stt_config.dart';
 import 'audio/audio_buffer.dart';
 import 'audio/audio_processor.dart';
 import 'engines/inference_engine.dart';
@@ -24,7 +24,12 @@ class SttFlutter {
     final dir = modelDir ?? await ModelDownloader.defaultStoragePath(model);
     final modelFiles = <String, String>{};
     for (final f in model.files) {
-      modelFiles[f.filename] = '$dir/${f.filename}';
+      final path = '$dir/${f.filename}';
+      final file = File(path);
+      if (!await file.exists()) {
+        throw FileSystemException('Model file not found: ${f.filename}', path);
+      }
+      modelFiles[f.filename] = path;
     }
 
     _ort = ort.OnnxRuntime();
