@@ -11,7 +11,8 @@ dependencies:
     sdk: flutter
   stt_flutter:
     path: ../
-  record: ^6.2.0
+  flutter_sound: ^9.30.0
+  permission_handler: ^11.0.0
   path_provider: ^2.1.0
 
 dev_dependencies:
@@ -21,3 +22,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/hello_en.wav
