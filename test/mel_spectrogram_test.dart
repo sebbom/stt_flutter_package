@@ -5,6 +5,11 @@ import 'package:stt_flutter/stt_flutter.dart';
 
 void main() {
   group('MelSpectrogram', () {
+    late MelSpectrogram ms;
+    setUp(() {
+      ms = MelSpectrogram();
+    });
+
     test('compute returns correct shape for 1s audio', () {
       // 1 second at 16kHz
       final samples = Float32List(16000);
@@ -12,18 +17,18 @@ void main() {
         samples[i] = 0.3 * sin(2 * pi * 440 * i / 16000);
       }
 
-      final mel = MelSpectrogram.compute(samples);
+      final mel = ms.compute(samples);
       // 1s @ 16kHz hop 160 → 98 frames × 80 bins = 7840
-      expect(mel.length % MelSpectrogram.nMels, 0);
-      expect(mel.length ~/ MelSpectrogram.nMels, greaterThan(0));
-      expect(mel.length, lessThanOrEqualTo(MelSpectrogram.maxFrames * MelSpectrogram.nMels));
+      expect(mel.length % ms.nMels, 0);
+      expect(mel.length ~/ ms.nMels, greaterThan(0));
+      expect(mel.length, lessThanOrEqualTo(MelSpectrogram.maxFrames * ms.nMels));
     });
 
     test('compute handles empty audio gracefully', () {
       final samples = Float32List(0);
-      final mel = MelSpectrogram.compute(samples);
+      final mel = ms.compute(samples);
       // Should produce at least 1 frame of silence
-      expect(mel.length, MelSpectrogram.nMels);
+      expect(mel.length, ms.nMels);
     });
 
     test('compute produces finite values', () {
@@ -32,7 +37,7 @@ void main() {
         samples[i] = 0.1 * sin(2 * pi * 1000 * i / 16000);
       }
 
-      final mel = MelSpectrogram.compute(samples);
+      final mel = ms.compute(samples);
       for (int i = 0; i < mel.length; i++) {
         expect(mel[i].isNaN, false);
         expect(mel[i].isInfinite, false);
@@ -46,24 +51,24 @@ void main() {
         samples[i] = 0.5 * sin(2 * pi * 1000 * i / 16000);
       }
 
-      final mel = MelSpectrogram.compute(samples);
+      final mel = ms.compute(samples);
 
       // Average energy per mel band across all frames
-      final avgBands = Float64List(MelSpectrogram.nMels);
-      final nFrames = mel.length ~/ MelSpectrogram.nMels;
+      final avgBands = Float64List(ms.nMels);
+      final nFrames = mel.length ~/ ms.nMels;
       for (int f = 0; f < nFrames; f++) {
-        for (int b = 0; b < MelSpectrogram.nMels; b++) {
-          avgBands[b] += mel[f * MelSpectrogram.nMels + b];
+        for (int b = 0; b < ms.nMels; b++) {
+          avgBands[b] += mel[f * ms.nMels + b];
         }
       }
-      for (int b = 0; b < MelSpectrogram.nMels; b++) {
+      for (int b = 0; b < ms.nMels; b++) {
         avgBands[b] /= nFrames;
       }
 
       // Find the band with maximum energy
       double maxEnergy = -1e10;
       int maxBand = 0;
-      for (int b = 0; b < MelSpectrogram.nMels; b++) {
+      for (int b = 0; b < ms.nMels; b++) {
         if (avgBands[b] > maxEnergy) {
           maxEnergy = avgBands[b];
           maxBand = b;
