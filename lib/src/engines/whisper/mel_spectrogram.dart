@@ -85,7 +85,7 @@ class MelSpectrogram {
       }
     }
 
-    // Mel filterbank + log
+    // Mel filterbank
     final n = min(nFrames, maxFrames);
     final mel = Float64List(n * nMels);
 
@@ -97,7 +97,27 @@ class MelSpectrogram {
         for (int k = 0; k < nFreqBins; k++) {
           sum += stft[stftOffset + k] * _melFilterbank[fbOffset + k];
         }
-        mel[t * nMels + m] = log(max(sum, 1e-10));
+        mel[t * nMels + m] = max(sum, 1e-10);
+      }
+    }
+
+    // log10 (as Whisper expects)
+    for (int i = 0; i < mel.length; i++) {
+      mel[i] = log(mel[i]) / ln10;
+    }
+
+    // Normalize each mel band to zero mean, unit variance over time
+    for (int m = 0; m < nMels; m++) {
+      double sum = 0, sqSum = 0;
+      for (int t = 0; t < n; t++) {
+        final v = mel[t * nMels + m];
+        sum += v;
+        sqSum += v * v;
+      }
+      final mean = sum / n;
+      final std = sqrt(max(sqSum / n - mean * mean, 1e-10));
+      for (int t = 0; t < n; t++) {
+        mel[t * nMels + m] = (mel[t * nMels + m] - mean) / std;
       }
     }
 

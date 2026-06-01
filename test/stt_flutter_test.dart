@@ -19,8 +19,9 @@ void main() {
   test('ModelRegistry.get returns correct models', () {
     final tiny = ModelRegistry.get('whisper-tiny');
     expect(tiny.type, SttModelType.whisper);
-    expect(tiny.files.length, 2);
+    expect(tiny.files.length, 3);
     expect(tiny.files[0].filename, 'encoder.onnx');
+    expect(tiny.files[2].filename, 'vocab.json');
 
     final zipformer = ModelRegistry.get('sherpa-zipformer-en');
     expect(zipformer.type, SttModelType.sherpa);

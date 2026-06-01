@@ -20,13 +20,16 @@ class ModelDownloader {
     await Directory(dir).create(recursive: true);
 
     for (final file in model.files) {
-      await _downloadFile(
-        url: file.url,
-        destPath: '$dir/${file.filename}',
-        onProgress: (received, total) {
-          onFileProgress?.call(file.filename, received, total);
-        },
-      );
+      final destPath = '$dir/${file.filename}';
+      if (file.filename.endsWith('.tar.bz2') || !await File(destPath).exists()) {
+        await _downloadFile(
+          url: file.url,
+          destPath: destPath,
+          onProgress: (received, total) {
+            onFileProgress?.call(file.filename, received, total);
+          },
+        );
+      }
     }
 
     // Extract .tar.bz2 archives (Sherpa models)

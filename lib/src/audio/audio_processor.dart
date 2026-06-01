@@ -38,26 +38,51 @@ class AudioProcessor {
   }
 
   static AudioBuffer _parseWavBytes(Uint8List bytes) {
-    if (bytes.length < 44) {
-      throw FormatException('WAV file too small: ${bytes.length} bytes (need at least 44)');
+    if (bytes.length < 12 || String.fromCharCodes(bytes.sublist(0, 4)) != 'RIFF') {
+      throw FormatException('Not a valid WAV file');
     }
-    final channels = bytes[22] | (bytes[23] << 8);
-    final sampleRate = bytes[24] | (bytes[25] << 8) | (bytes[26] << 16) | (bytes[27] << 24);
-    final bitsPerSample = bytes[34] | (bytes[35] << 8);
-    const headerSize = 44;
 
+    // Read format info from the "fmt " chunk (always present)
+    int channels = 1, sampleRate = 16000, bitsPerSample = 16;
+    int dataOffset = 0;
+
+    int pos = 12; // skip RIFF header
+    while (pos + 8 <= bytes.length) {
+      final chunkId = String.fromCharCodes(bytes.sublist(pos, pos + 4));
+      final chunkSize = bytes[pos + 4] | (bytes[pos + 5] << 8) | (bytes[pos + 6] << 16) | (bytes[pos + 7] << 24);
+      pos += 8;
+
+      if (pos + chunkSize > bytes.length) break;
+
+      if (chunkId == 'fmt ') {
+        if (chunkSize >= 16) {
+          channels = bytes[pos + 2] | (bytes[pos + 3] << 8);
+          sampleRate = bytes[pos + 4] | (bytes[pos + 5] << 8) | (bytes[pos + 6] << 16) | (bytes[pos + 7] << 24);
+          bitsPerSample = bytes[pos + 14] | (bytes[pos + 15] << 8);
+        }
+      } else if (chunkId == 'data') {
+        dataOffset = pos;
+        break;
+      }
+
+      pos += chunkSize + (chunkSize % 2); // pad to word boundary
+    }
+
+    if (dataOffset == 0) {
+      throw FormatException('No data chunk found in WAV file');
+    }
     if (channels == 0 || sampleRate == 0) {
       throw FormatException('Invalid WAV header (channels=$channels, rate=$sampleRate)');
     }
 
     final samples = <double>[];
     if (bitsPerSample == 16) {
-      for (int i = headerSize; i < bytes.length - 1; i += 2 * channels) {
+      for (int i = dataOffset; i < bytes.length - 1; i += 2 * channels) {
         final s = (bytes[i] | (bytes[i + 1] << 8)).toSigned(16);
         samples.add(s / 32768.0);
       }
     } else if (bitsPerSample == 8) {
-      for (int i = headerSize; i < bytes.length; i += channels) {
+      for (int i = dataOffset; i < bytes.length; i += channels) {
         samples.add((bytes[i] - 128) / 128.0);
       }
     }

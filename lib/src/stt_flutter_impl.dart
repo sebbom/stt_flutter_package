@@ -26,10 +26,22 @@ class SttFlutter {
     for (final f in model.files) {
       final path = '$dir/${f.filename}';
       final file = File(path);
-      if (!await file.exists()) {
-        throw FileSystemException('Model file not found: ${f.filename}', path);
+      if (await file.exists()) {
+        modelFiles[f.filename] = path;
       }
-      modelFiles[f.filename] = path;
+    }
+
+    // Also discover extracted files from .tar.bz2 archives (e.g. Sherpa)
+    final modelDir_ = Directory(dir);
+    if (await modelDir_.exists()) {
+      await for (final entry in modelDir_.list()) {
+        if (entry is File) {
+          final name = entry.uri.pathSegments.last;
+          if (name.endsWith('.onnx') || name.endsWith('.txt') || name.endsWith('.json')) {
+            modelFiles[name] = entry.path;
+          }
+        }
+      }
     }
 
     _ort = ort.OnnxRuntime();

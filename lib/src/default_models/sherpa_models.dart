@@ -15,6 +15,6 @@ void registerSherpaModels() {
         filename: 'sherpa-onnx-zipformer-en-2023-06-26.tar.bz2',
       ),
     ],
-    sizeMb: 35,
+    sizeMb: 300,
   ));
 }
