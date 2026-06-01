@@ -7,7 +7,7 @@ import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
-import 'fbank.dart';
+import '../../audio/fbank.dart';
 
 class SherpaInferenceEngine implements InferenceEngine {
   final ort.OnnxRuntime _runtime;

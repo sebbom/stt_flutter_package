@@ -1,14 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math' show min;
+
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
-import '../whisper/mel_spectrogram.dart';
+import '../../utils/math_utils.dart';
+import '../../audio/mel_spectrogram.dart';
 
 class VoxtralInferenceEngine implements InferenceEngine {
   final ort.OnnxRuntime _runtime;
@@ -173,32 +174,23 @@ class VoxtralInferenceEngine implements InferenceEngine {
     return texts.join('').replaceAll('Ġ', ' ').trim();
   }
 
-  Float32List _transposeMel(Float64List mel, int totalFrames, int chunkOffset, int chunkSize) {
-    final actual = (totalFrames - chunkOffset).clamp(0, chunkSize);
-    final out = Float32List(_numMelBins * chunkSize);
-    for (int t = 0; t < actual; t++) {
-      final srcBase = (chunkOffset + t) * _numMelBins;
-      for (int m = 0; m < _numMelBins; m++) {
-        out[m * chunkSize + t] = mel[srcBase + m];
-      }
-    }
-    return out;
-  }
-
   @override
   Future<SttResult> transcribe(AudioBuffer audio, {String? language}) async {
     final stopwatch = Stopwatch()..start();
 
     // 1. Compute mel spectrogram
-    final mel = await Isolate.run(() => MelSpectrogram.compute(audio.samples));
+    final mel = await Isolate.run(() {
+      final ms = MelSpectrogram(nMels: _numMelBins);
+      return ms.compute(audio.samples);
+    });
     final totalFrames = mel.length ~/ _numMelBins;
     debugPrint('=== Voxtral transcribe: audio=${audio.length}samples, melFrames=$totalFrames ===');
 
     final fullText = StringBuffer();
-    final fullMelFrames = min(totalFrames, _maxSourcePositions);
+    final fullMelFrames = totalFrames < _maxSourcePositions ? totalFrames : _maxSourcePositions;
 
     // 2. Transpose and pad to max frames
-    final chunk = _transposeMel(mel, totalFrames, 0, fullMelFrames);
+    final chunk = transposeMel(mel, _numMelBins, totalFrames, 0, fullMelFrames);
     final melPadded = Float32List(_numMelBins * _maxSourcePositions);
     melPadded.setRange(0, chunk.length, chunk);
 
@@ -219,7 +211,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
 
     // 4. Autoregressive decoder loop
     final tokens = <int>[bos];
-    final maxNewTokens = min(_maxTargetPositions, 200);
+    final maxNewTokens = _maxTargetPositions < 200 ? _maxTargetPositions : 200;
 
     for (int i = 0; i < maxNewTokens; i++) {
       final ids = Int64List.fromList(tokens.map((t) => t.toInt()).toList());
@@ -229,53 +221,57 @@ class VoxtralInferenceEngine implements InferenceEngine {
         _decInputIds: idTensor,
         _decInputStates: encTensor,
       };
-      for (final extra in _decoderExtraInputs) {
-        final eName = extra['name'] as String? ?? '';
-        final extraShape = List<int>.from(extra['shape'] as List<dynamic>? ?? [1]);
-        final extraType = (extra['type'] as String? ?? 'float32').toLowerCase();
-        final fixedShape = extraShape.map((s) => s == -1 ? 1 : s).toList();
-        final total = fixedShape.fold(1, (a, b) => a * b);
+      final extraTensors = <ort.OrtValue>[];
+      try {
+        for (final extra in _decoderExtraInputs) {
+          final eName = extra['name'] as String? ?? '';
+          final extraShape = List<int>.from(extra['shape'] as List<dynamic>? ?? [1]);
+          final extraType = (extra['type'] as String? ?? 'float32').toLowerCase();
+          final fixedShape = extraShape.map((s) => s == -1 ? 1 : s).toList();
+          final total = fixedShape.fold(1, (a, b) => a * b);
 
-        if (extraType.contains('bool')) {
-          decoderInputs[eName] = await ort.OrtValue.fromList(List<bool>.filled(total, false), fixedShape);
-        } else if (extraType.contains('int64')) {
-          decoderInputs[eName] = await ort.OrtValue.fromList(Int64List(total), fixedShape);
-        } else {
-          decoderInputs[eName] = await ort.OrtValue.fromList(Float32List(total), fixedShape);
+          ort.OrtValue tensor;
+          if (extraType.contains('bool')) {
+            tensor = await ort.OrtValue.fromList(List<bool>.filled(total, false), fixedShape);
+          } else if (extraType.contains('int64')) {
+            tensor = await ort.OrtValue.fromList(Int64List(total), fixedShape);
+          } else {
+            tensor = await ort.OrtValue.fromList(Float32List(total), fixedShape);
+          }
+          extraTensors.add(tensor);
+          decoderInputs[eName] = tensor;
         }
-      }
 
-      final decoderOut = await _decoderSession!.run(decoderInputs);
-      final rawLogits = await decoderOut[_decOutputLogits]!.asFlattenedList();
+        final decoderOut = await _decoderSession!.run(decoderInputs);
+        final rawLogits = await decoderOut[_decOutputLogits]!.asFlattenedList();
 
-      await idTensor.dispose();
-      for (final v in decoderOut.values) {
-        await v.dispose();
-      }
-
-      final vocabSize = rawLogits.length ~/ tokens.length;
-      final lastStart = (tokens.length - 1) * vocabSize;
-      final lastLogits = lastStart + vocabSize <= rawLogits.length
-          ? rawLogits.sublist(lastStart, lastStart + vocabSize)
-          : rawLogits;
-
-      // Argmax
-      int best = 0;
-      double bestVal = double.negativeInfinity;
-      for (int j = 0; j < lastLogits.length; j++) {
-        final v = (lastLogits[j] as num).toDouble();
-        if (v > bestVal) {
-          bestVal = v;
-          best = j;
+        await idTensor.dispose();
+        for (final v in decoderOut.values) {
+          await v.dispose();
         }
-      }
+        for (final t in extraTensors) {
+          await t.dispose();
+        }
 
-      if (best == eos) break;
-      tokens.add(best);
+        final vocabSize = rawLogits.length ~/ tokens.length;
+        final lastStart = (tokens.length - 1) * vocabSize;
+        final lastLogits = lastStart + vocabSize <= rawLogits.length
+            ? rawLogits.sublist(lastStart, lastStart + vocabSize)
+            : rawLogits;
 
-      if (i < 20 || i % 50 == 0) {
-        final partial = _decode(tokens.sublist(1));
-        debugPrint('  decoder step $i: token=$best, partial="$partial"');
+        final best = argmax(lastLogits);
+
+        if (best == eos) break;
+        tokens.add(best);
+
+        if (i < 20 || i % 50 == 0) {
+          final partial = _decode(tokens.sublist(1));
+          debugPrint('  decoder step $i: token=$best, partial="$partial"');
+        }
+      } finally {
+        for (final t in extraTensors) {
+          await t.dispose();
+        }
       }
     }
 
