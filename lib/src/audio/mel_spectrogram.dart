@@ -3,20 +3,25 @@ import 'dart:typed_data';
 
 /// Log-Mel spectrogram for Whisper models.
 ///
-/// Uses 400-sample Hann window, 160-sample hop, 80 mel bins.
-/// Output shape: [1, 80, 3000] as flattened Float64List (frames * nMels).
+/// Uses 400-sample Hann window, 160-sample hop, configurable mel bins.
+/// Output shape: [1, nMels, 3000] as flattened Float64List (frames * nMels).
 ///
-/// Designed to be stateless — safe to call from [Isolate.run].
+/// Safe to call from [Isolate.run] (pass a closure capturing the instance).
 class MelSpectrogram {
-  static const int nMels = 80;
+  final int nMels;
+  final Float64List _melFilterbank;
+
   static const int nFft = 400;
   static const int hopLength = 160;
   static const int maxFrames = 3000;
   static const int sampleRate = 16000;
-  static const int nFreqBins = nFft ~/ 2 + 1;
 
   static final Float64List _hannWindow = _createHannWindow();
-  static final Float64List _melFilterbank = _createMelFilterbank();
+
+  MelSpectrogram({this.nMels = 80})
+      : _melFilterbank = _createMelFilterbank(nMels);
+
+  int get nFreqBins => nFft ~/ 2 + 1;
 
   static Float64List _createHannWindow() {
     final w = Float64List(nFft);
@@ -26,7 +31,8 @@ class MelSpectrogram {
     return w;
   }
 
-  static Float64List _createMelFilterbank() {
+  static Float64List _createMelFilterbank(int nMels) {
+    final nFreqBins = nFft ~/ 2 + 1;
     final fb = Float64List(nMels * nFreqBins);
     final lowMel = _hzToMel(0);
     final highMel = _hzToMel(sampleRate / 2);
@@ -57,23 +63,21 @@ class MelSpectrogram {
   static double _melToHz(double mel) => 700 * (exp(mel / 2595) - 1);
 
   /// Compute log-mel spectrogram from 16kHz mono PCM samples.
-  /// Returns flattened Float64List (frames * nMels) transposed to [frames, nMels].
-  static Float64List compute(Float32List samples) {
-    final nFrames = max(1, (samples.length - nFft) ~/ hopLength + 1);
+  /// Returns flattened Float64List (frames * nMels).
+  Float64List compute(Float32List samples) {
     final nFreqBins = nFft ~/ 2 + 1;
+    final nFrames = max(1, (samples.length - nFft) ~/ hopLength + 1);
 
     // STFT magnitude spectrum
     final stft = Float64List(nFrames * nFreqBins);
     final padded = Float64List(nFft);
 
     for (int t = 0; t < nFrames; t++) {
-      // Frame extraction + windowing
       for (int i = 0; i < nFft; i++) {
         final idx = t * hopLength + i;
         padded[i] = (idx < samples.length ? samples[idx] : 0.0) * _hannWindow[i];
       }
 
-      // DFT magnitude (simplified direct computation)
       for (int k = 0; k < nFreqBins; k++) {
         double real = 0, imag = 0;
         for (int i = 0; i < nFft; i++) {
@@ -101,12 +105,12 @@ class MelSpectrogram {
       }
     }
 
-    // log10 (as Whisper expects)
+    // log10
     for (int i = 0; i < mel.length; i++) {
       mel[i] = log(mel[i]) / ln10;
     }
 
-    // Normalize each mel band to zero mean, unit variance over time
+    // Per-band zero-mean unit-variance normalization
     for (int m = 0; m < nMels; m++) {
       double sum = 0, sqSum = 0;
       for (int t = 0; t < n; t++) {
@@ -122,5 +126,10 @@ class MelSpectrogram {
     }
 
     return mel;
+  }
+
+  /// Convenience for default 80-band computation (backward compat).
+  static Float64List compute80(Float32List samples) {
+    return MelSpectrogram().compute(samples);
   }
 }
