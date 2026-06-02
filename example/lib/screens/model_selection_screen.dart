@@ -238,7 +238,24 @@ class _TranscribeScreenState extends State<_TranscribeScreen> {
   bool _recording = false;
   bool _transcribing = false;
   String _text = '';
+  String _language = 'en';
   final List<String> _history = [];
+
+  static const _languages = {
+    'en': 'English',
+    'de': 'German',
+    'fr': 'French',
+    'es': 'Spanish',
+    'pt': 'Portuguese',
+    'ja': 'Japanese',
+    'zh': 'Chinese',
+    'ru': 'Russian',
+    'it': 'Italian',
+    'nl': 'Dutch',
+    'pl': 'Polish',
+    'tr': 'Turkish',
+    'ar': 'Arabic',
+  };
 
   @override
   void initState() {
@@ -295,7 +312,7 @@ class _TranscribeScreenState extends State<_TranscribeScreen> {
       final path = '${dir.path}/sample_test.wav';
       final data = await rootBundle.load('assets/hello_en.wav');
       await File(path).writeAsBytes(data.buffer.asUint8List());
-      final result = await _stt!.transcribeFile(path);
+      final result = await _stt!.transcribeFile(path, language: _language);
       if (mounted) {
         setState(() {
           _text = result.text;
@@ -360,7 +377,7 @@ class _TranscribeScreenState extends State<_TranscribeScreen> {
           _recording = false;
           _transcribing = true;
         });
-        final result = await _stt!.transcribeFile(savedPath);
+        final result = await _stt!.transcribeFile(savedPath, language: _language);
         if (mounted) {
           setState(() {
             _text = result.text;
@@ -478,6 +495,28 @@ class _TranscribeScreenState extends State<_TranscribeScreen> {
                       style: theme.textTheme.bodySmall,
                     ),
                     const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text('Language: ', style: theme.textTheme.bodySmall),
+                        DropdownButton<String>(
+                          value: _language,
+                          underline: const SizedBox(),
+                          items: _languages.entries
+                              .map((e) => DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(e.value, style: const TextStyle(fontSize: 14)),
+                                  ))
+                              .toList(),
+                          onChanged: _transcribing
+                              ? null
+                              : (v) {
+                                  if (v != null) setState(() => _language = v);
+                                },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: _transcribing ? null : _testWithSample,
                       icon: const Icon(Icons.audiotrack, size: 18),
