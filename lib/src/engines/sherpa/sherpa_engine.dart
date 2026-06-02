@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
+import '../../cancellation_token.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
 import '../../audio/fbank.dart';
@@ -145,7 +146,7 @@ class SherpaInferenceEngine implements InferenceEngine {
   }
 
   @override
-  Future<SttResult> transcribe(AudioBuffer audio, {String? language}) async {
+  Future<SttResult> transcribe(AudioBuffer audio, {String? language, CancellationToken? token}) async {
     final stopwatch = Stopwatch()..start();
 
     // 1. Compute Fbank features in background isolate
@@ -211,6 +212,7 @@ class SherpaInferenceEngine implements InferenceEngine {
 
     int prevToken = blank;
     while (t < nFrames && resultTokens.length < maxTokens) {
+      token?.throwIfCancelled();
       // Decoder forward
       final decInputIds = Int64List.fromList([prevToken]);
       final decInMap = <String, ort.OrtValue>{

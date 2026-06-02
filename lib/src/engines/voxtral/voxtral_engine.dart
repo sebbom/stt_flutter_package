@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
+import '../../cancellation_token.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
 import '../../utils/math_utils.dart';
@@ -67,12 +68,23 @@ class VoxtralInferenceEngine implements InferenceEngine {
     }
 
     // Create sessions (discover files by pattern for quantized variants)
-    _audioEncoderSession = await _runtime.createSession(
-      _findFile(modelFiles, ['audio_encoder']),
-    );
-    _decoderSession = await _runtime.createSession(
-      _findFile(modelFiles, ['decoder_model_merged']),
-    );
+    try {
+      _audioEncoderSession = await _runtime.createSession(
+        _findFile(modelFiles, ['audio_encoder']),
+      );
+      _decoderSession = await _runtime.createSession(
+        _findFile(modelFiles, ['decoder_model_merged']),
+      );
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('deserialize') || msg.contains('int4') || msg.contains('q4f')) {
+        throw Exception(
+          'Voxtral q4f16 uses INT4 quantization unsupported by mobile ONNX Runtime. '
+          'FP16 model variants are required for on-device inference.',
+        );
+      }
+      rethrow;
+    }
 
     // Detect encoder input/output names
     final encInputs = await _audioEncoderSession!.getInputInfo();
@@ -105,7 +117,6 @@ class VoxtralInferenceEngine implements InferenceEngine {
     }
     for (final info in decInputs) {
       final name = (info['name'] as String?) ?? '';
-      if (name.startsWith('past')) continue;
       if (name.contains('input_ids')) {
         _decInputIds = name;
       } else if (name.contains('encoder_hidden_states') || name.contains('encoder_attn')) {
@@ -175,7 +186,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
   }
 
   @override
-  Future<SttResult> transcribe(AudioBuffer audio, {String? language}) async {
+  Future<SttResult> transcribe(AudioBuffer audio, {String? language, CancellationToken? token}) async {
     final stopwatch = Stopwatch()..start();
 
     // 1. Compute mel spectrogram
@@ -214,6 +225,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
     final maxNewTokens = _maxTargetPositions < 200 ? _maxTargetPositions : 200;
 
     for (int i = 0; i < maxNewTokens; i++) {
+      token?.throwIfCancelled();
       final ids = Int64List.fromList(tokens.map((t) => t.toInt()).toList());
       final idTensor = await ort.OrtValue.fromList(ids, [1, tokens.length]);
 

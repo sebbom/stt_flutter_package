@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
 import '../../stt_exception.dart';
+import '../../cancellation_token.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
 import '../../utils/math_utils.dart';
@@ -143,21 +144,46 @@ class WhisperInferenceEngine implements InferenceEngine {
     }
   }
 
+  static final Map<int, int> _unicodeToByte = _buildUtob();
+
+  static Map<int, int> _buildUtob() {
+    final btou = <int, int>{};
+    for (int b = 33; b <= 126; b++) btou[b] = b;
+    for (int b = 161; b <= 172; b++) btou[b] = b;
+    for (int b = 174; b <= 255; b++) btou[b] = b;
+    int n = 0;
+    for (int b = 0; b < 256; b++) {
+      if (!btou.containsKey(b)) {
+        btou[b] = 256 + n;
+        n++;
+      }
+    }
+    final utob = <int, int>{};
+    for (final entry in btou.entries) {
+      utob[entry.value] = entry.key;
+    }
+    return utob;
+  }
+
   String _decode(List<int> tokens) {
     if (_vocab == null) {
       return tokens.map((t) => t.toString()).join(' ');
     }
-    final b = StringBuffer();
+    final bytes = <int>[];
     for (final t in tokens) {
       if (t >= 50256) continue;
       final s = _vocab![t];
-      if (s != null) b.write(s);
+      if (s == null) continue;
+      for (int i = 0; i < s.length; i++) {
+        final cp = s.codeUnitAt(i);
+        bytes.add(_unicodeToByte[cp] ?? cp);
+      }
     }
-    return b.toString().replaceAll('Ġ', ' ').trim();
+    return utf8.decode(bytes, allowMalformed: true).replaceAll('Ġ', ' ').trim();
   }
 
   @override
-  Future<SttResult> transcribe(AudioBuffer audio, {String? language}) async {
+  Future<SttResult> transcribe(AudioBuffer audio, {String? language, CancellationToken? token}) async {
     final stopwatch = Stopwatch()..start();
     final nMels = this.nMels;
     final maxFrames = this.maxFrames;
@@ -185,12 +211,14 @@ class WhisperInferenceEngine implements InferenceEngine {
         await v.dispose();
       }
 
+      token?.throwIfCancelled();
       debugPrint('  encoder: offset=$offset, output=${encData.length} floats');
 
       final encTensor = await ort.OrtValue.fromList(encData, [1, encoderFrames, _dModel]);
       final tokens = <int>[...prompt];
 
       for (int i = 0; i < maxTokens - prompt.length; i++) {
+        token?.throwIfCancelled();
         final ids = Int64List.fromList(tokens.map((t) => t.toInt()).toList());
         final idTensor = await ort.OrtValue.fromList(ids, [1, tokens.length]);
 

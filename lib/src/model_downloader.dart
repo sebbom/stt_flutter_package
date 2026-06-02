@@ -75,6 +75,14 @@ class ModelDownloader {
     }
 
     await sink.close();
+
+    if (total > 0 && received != total) {
+      await file.delete();
+      throw Exception(
+        'Download incomplete: $received of $total bytes. '
+        'Connection may have dropped. Please retry.',
+      );
+    }
   }
 
   static Future<void> _extractTarBz2(String archivePath, String destDir) async {
