@@ -13,6 +13,7 @@ dependencies:
     path: ../
   permission_handler: ^11.0.0
   path_provider: ^2.1.0
+  file_picker: ^10.3.3
 
 dev_dependencies:
   flutter_test:

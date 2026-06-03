@@ -18,7 +18,6 @@ class _ModelSelectionScreenState extends State<ModelSelectionScreen> {
   @override
   void initState() {
     super.initState();
-    // Trigger default model registration
     ModelRegistry.available();
   }
 
@@ -62,15 +61,13 @@ class _ModelSelectionScreenState extends State<ModelSelectionScreen> {
         });
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Download failed: $e'), backgroundColor: Colors.red),
+            SnackBar(
+                content: Text('Download failed: $e'),
+                backgroundColor: Colors.red),
           );
         }
       }
     }
-  }
-
-  Future<void> _checkDownloadedAndRefresh() async {
-    setState(() {});
   }
 
   void _openTranscription(BuildContext context, ModelDescriptor model) {
@@ -83,6 +80,8 @@ class _ModelSelectionScreenState extends State<ModelSelectionScreen> {
   @override
   Widget build(BuildContext context) {
     final models = ModelRegistry.available();
+    final groups = _groupByType(models);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Local STT'),
@@ -90,23 +89,78 @@ class _ModelSelectionScreenState extends State<ModelSelectionScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _checkDownloadedAndRefresh,
+            onPressed: () => setState(() {}),
           ),
         ],
       ),
       body: ListView.builder(
         padding: const EdgeInsets.all(12),
-        itemCount: models.length,
-        itemBuilder: (_, i) => _ModelCard(
-          model: models[i],
-          progress: _downloadProgress[models[i].id],
-          downloading: _downloadsInProgress.contains(models[i].id),
-          onDownload: () => _download(context, models[i]),
-          onOpen: () => _openTranscription(context, models[i]),
-        ),
+        itemCount: groups.length,
+        itemBuilder: (_, i) {
+          final group = groups[i];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
+                child: Text(
+                  _typeLabel(group.type),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              ...group.models.map(
+                (m) => _ModelCard(
+                  model: m,
+                  progress: _downloadProgress[m.id],
+                  downloading: _downloadsInProgress.contains(m.id),
+                  onDownload: () => _download(context, m),
+                  onOpen: () => _openTranscription(context, m),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
+
+  List<_ModelGroup> _groupByType(List<ModelDescriptor> models) {
+    final order = [
+      SttModelType.whisper,
+      SttModelType.sherpa,
+      SttModelType.nemo,
+      SttModelType.canary,
+    ];
+    final map = <SttModelType, List<ModelDescriptor>>{
+      for (final t in order) t: <ModelDescriptor>[],
+    };
+    for (final m in models) {
+      map[m.type]!.add(m);
+    }
+    return [
+      for (final t in order)
+        if (map[t]!.isNotEmpty) _ModelGroup(t, map[t]!),
+    ];
+  }
+
+  String _typeLabel(SttModelType type) {
+    switch (type) {
+      case SttModelType.whisper:
+        return 'Whisper (multilingual + English-only)';
+      case SttModelType.sherpa:
+        return 'Sherpa Zipformer (monolingual)';
+      case SttModelType.nemo:
+        return 'NeMo Parakeet (multilingual TDT)';
+      case SttModelType.canary:
+        return 'NVIDIA Canary (en/es/de/fr)';
+    }
+  }
+}
+
+class _ModelGroup {
+  final SttModelType type;
+  final List<ModelDescriptor> models;
+  _ModelGroup(this.type, this.models);
 }
 
 class _ModelCard extends StatefulWidget {
@@ -161,8 +215,6 @@ class _ModelCardState extends State<_ModelCard> {
         return Icons.language;
       case SttModelType.canary:
         return Icons.record_voice_over;
-      case SttModelType.voxtral:
-        return Icons.smart_toy;
     }
   }
 
@@ -175,6 +227,7 @@ class _ModelCardState extends State<_ModelCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final m = widget.model;
+    final isMono = m.languages.length == 1;
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
@@ -196,8 +249,12 @@ class _ModelCardState extends State<_ModelCard> {
                         Text(m.name, style: theme.textTheme.titleSmall),
                         const SizedBox(height: 2),
                         Text(
-                          '${m.languages.length > 5 ? "${m.languages.length} langs" : m.languages.join(", ")} • ${_sizeStr(m.sizeMb)}',
-                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          isMono
+                              ? 'Monolingual: ${m.languages.first} • ${_sizeStr(m.sizeMb)}'
+                              : '${m.languages.length} languages • ${_sizeStr(m.sizeMb)}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -225,11 +282,15 @@ class _ModelCardState extends State<_ModelCard> {
                   padding: const EdgeInsets.only(top: 8),
                   child: Row(
                     children: [
-                      Icon(Icons.check_circle, size: 14, color: theme.colorScheme.primary),
+                      Icon(Icons.check_circle,
+                          size: 14, color: theme.colorScheme.primary),
                       const SizedBox(width: 4),
-                      Text('Downloaded', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+                      Text('Downloaded',
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: theme.colorScheme.primary)),
                       const Spacer(),
-                      Icon(Icons.arrow_forward_ios, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                      Icon(Icons.arrow_forward_ios,
+                          size: 14, color: theme.colorScheme.onSurfaceVariant),
                     ],
                   ),
                 ),
