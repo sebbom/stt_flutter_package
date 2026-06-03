@@ -11,6 +11,8 @@ class AudioCaptureService {
   static const int sampleRate = 16000;
   static const int numChannels = 1;
 
+  Future<bool> hasPermission({bool request = true}) => _recorder.hasPermission(request: request);
+
   Future<void> startRecording(Function(List<int>) onAudioData) async {
     if (_isRecording) return;
 
