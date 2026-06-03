@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stt_flutter/stt_flutter.dart';
-import 'package:stt_flutter/src/audio/audio_processor.dart';
 
 void main() {
   group('AudioProcessor', () {

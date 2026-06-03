@@ -1,7 +1,7 @@
 name: stt_flutter_example
 description: Example app for stt_flutter package — streaming VAD, model switching.
 publish_to: none
-version: 0.2.0
+version: 0.3.0
 
 environment:
   sdk: ^3.0.0

@@ -12,13 +12,12 @@ class AudioProcessor {
     return _parseWavBytes(bytes);
   }
 
-  /// Resample to 16kHz mono. Runs on main isolate (lightweight I/O).
-  static Future<AudioBuffer> resample(AudioBuffer input, {int targetRate = targetSampleRate}) async {
-    return Future.value(resampleSync(input, targetRate: targetRate));
-  }
-
-  /// Sync resample — safe for [Isolate.run].
-  static AudioBuffer resampleSync(AudioBuffer input, {int targetRate = targetSampleRate}) {
+  /// Resample to 16kHz mono. Lightweight enough to run on the main isolate,
+  /// but for big buffers callers should prefer [Isolate.run].
+  static AudioBuffer resampleSync(
+    AudioBuffer input, {
+    int targetRate = targetSampleRate,
+  }) {
     if (input.sampleRate == targetRate) return input;
     final ratio = input.sampleRate / targetRate;
     final newLength = (input.length / ratio).round();
@@ -29,7 +28,8 @@ class AudioProcessor {
       final srcIdx = srcPos.floor();
       final frac = srcPos - srcIdx;
       if (srcIdx + 1 < input.length) {
-        output[i] = input.samples[srcIdx] * (1 - frac) + input.samples[srcIdx + 1] * frac;
+        output[i] =
+            input.samples[srcIdx] * (1 - frac) + input.samples[srcIdx + 1] * frac;
       } else {
         output[i] = input.samples[srcIdx];
       }
@@ -38,64 +38,156 @@ class AudioProcessor {
   }
 
   static AudioBuffer _parseWavBytes(Uint8List bytes) {
-    if (bytes.length < 12 || String.fromCharCodes(bytes.sublist(0, 4)) != 'RIFF') {
-      throw FormatException('Not a valid WAV file');
+    if (bytes.length < 12 ||
+        String.fromCharCodes(bytes.sublist(0, 4)) != 'RIFF' ||
+        String.fromCharCodes(bytes.sublist(8, 12)) != 'WAVE') {
+      throw const FormatException('Not a valid WAV file');
     }
 
-    // Read format info from the "fmt " chunk (always present)
-    int channels = 1, sampleRate = 16000, bitsPerSample = 16;
+    int channels = 1;
+    int sampleRate = 16000;
+    int bitsPerSample = 16;
+    int audioFormat = 1; // 1 = PCM, 3 = IEEE float
     int dataOffset = 0;
+    int dataSize = 0;
 
-    int pos = 12; // skip RIFF header
+    int pos = 12;
     while (pos + 8 <= bytes.length) {
       final chunkId = String.fromCharCodes(bytes.sublist(pos, pos + 4));
-      final chunkSize = bytes[pos + 4] | (bytes[pos + 5] << 8) | (bytes[pos + 6] << 16) | (bytes[pos + 7] << 24);
+      final chunkSize =
+          bytes[pos + 4] |
+          (bytes[pos + 5] << 8) |
+          (bytes[pos + 6] << 16) |
+          (bytes[pos + 7] << 24);
       pos += 8;
-
-      if (pos + chunkSize > bytes.length) break;
 
       if (chunkId == 'fmt ') {
         if (chunkSize >= 16) {
+          audioFormat = bytes[pos] | (bytes[pos + 1] << 8);
           channels = bytes[pos + 2] | (bytes[pos + 3] << 8);
-          sampleRate = bytes[pos + 4] | (bytes[pos + 5] << 8) | (bytes[pos + 6] << 16) | (bytes[pos + 7] << 24);
+          sampleRate =
+              bytes[pos + 4] |
+              (bytes[pos + 5] << 8) |
+              (bytes[pos + 6] << 16) |
+              (bytes[pos + 7] << 24);
           bitsPerSample = bytes[pos + 14] | (bytes[pos + 15] << 8);
         }
       } else if (chunkId == 'data') {
         dataOffset = pos;
+        dataSize = chunkSize;
         break;
       }
 
-      pos += chunkSize + (chunkSize % 2); // pad to word boundary
+      pos += chunkSize + (chunkSize.isOdd ? 1 : 0); // pad to word boundary
     }
 
     if (dataOffset == 0) {
-      throw FormatException('No data chunk found in WAV file');
+      throw const FormatException('No data chunk found in WAV file');
     }
     if (channels == 0 || sampleRate == 0) {
-      throw FormatException('Invalid WAV header (channels=$channels, rate=$sampleRate)');
+      throw FormatException(
+          'Invalid WAV header (channels=$channels, rate=$sampleRate)');
+    }
+    if (audioFormat != 1 && audioFormat != 3) {
+      throw FormatException(
+          'Unsupported WAV format code=$audioFormat (only PCM=1 and IEEE float=3)');
     }
 
-    final samples = <double>[];
-    if (bitsPerSample == 16) {
-      for (int i = dataOffset; i < bytes.length - 1; i += 2 * channels) {
-        final s = (bytes[i] | (bytes[i + 1] << 8)).toSigned(16);
-        samples.add(s / 32768.0);
-      }
-    } else if (bitsPerSample == 8) {
-      for (int i = dataOffset; i < bytes.length; i += channels) {
-        samples.add((bytes[i] - 128) / 128.0);
-      }
+    final frameCount = dataSize > 0
+        ? (dataSize * 8) ~/ (bitsPerSample * channels)
+        : (bytes.length - dataOffset) * 8 ~/ (bitsPerSample * channels);
+    if (frameCount <= 0) {
+      throw const FormatException('No audio samples found in WAV file');
     }
-    if (samples.isEmpty) {
-      throw FormatException('No audio samples found in WAV file');
+
+    final samples = Float32List(frameCount);
+    int p = dataOffset;
+    final end = dataSize > 0 ? dataOffset + dataSize : bytes.length;
+    final bytesPerSample = bitsPerSample ~/ 8;
+    final stride = bytesPerSample * channels;
+    int out = 0;
+
+    if (audioFormat == 1 && bitsPerSample == 16) {
+      while (p + stride <= end && out < frameCount) {
+        double acc = 0;
+        for (int c = 0; c < channels; c++) {
+          final i = p + c * 2;
+          final s = _toSigned16(bytes[i] | (bytes[i + 1] << 8));
+          acc += s / 32768.0;
+        }
+        samples[out++] = acc / channels;
+        p += stride;
+      }
+    } else if (audioFormat == 1 && bitsPerSample == 8) {
+      while (p + stride <= end && out < frameCount) {
+        double acc = 0;
+        for (int c = 0; c < channels; c++) {
+          acc += (bytes[p + c] - 128) / 128.0;
+        }
+        samples[out++] = acc / channels;
+        p += stride;
+      }
+    } else if (audioFormat == 1 && bitsPerSample == 24) {
+      while (p + stride <= end && out < frameCount) {
+        double acc = 0;
+        for (int c = 0; c < channels; c++) {
+          final b0 = bytes[p + c * 3];
+          final b1 = bytes[p + c * 3 + 1];
+          final b2 = bytes[p + c * 3 + 2];
+          final s24 = _toSigned24(b0 | (b1 << 8) | (b2 << 16));
+          acc += s24 / 8388608.0;
+        }
+        samples[out++] = acc / channels;
+        p += stride;
+      }
+    } else if (audioFormat == 1 && bitsPerSample == 32) {
+      while (p + stride <= end && out < frameCount) {
+        double acc = 0;
+        for (int c = 0; c < channels; c++) {
+          final i = p + c * 4;
+          final s32 = _toSigned32(bytes[i] |
+              (bytes[i + 1] << 8) |
+              (bytes[i + 2] << 16) |
+              (bytes[i + 3] << 24));
+          acc += s32 / 2147483648.0;
+        }
+        samples[out++] = acc / channels;
+        p += stride;
+      }
+    } else if (audioFormat == 3 && bitsPerSample == 32) {
+      while (p + stride <= end && out < frameCount) {
+        double acc = 0;
+        for (int c = 0; c < channels; c++) {
+          acc += _readFloat32LE(bytes, p + c * 4);
+        }
+        samples[out++] = acc / channels;
+        p += stride;
+      }
+    } else {
+      throw FormatException(
+          'Unsupported WAV encoding: format=$audioFormat, bits=$bitsPerSample');
     }
-    return AudioBuffer(samples: Float32List.fromList(samples), sampleRate: sampleRate);
+
+    return AudioBuffer(samples: samples, sampleRate: sampleRate);
   }
-}
 
-extension on int {
-  int toSigned(int bits) {
-    final signBit = 1 << (bits - 1);
-    return (this & (signBit - 1)) - (this & signBit);
+  static double _readFloat32LE(Uint8List b, int offset) {
+    final bd = ByteData.sublistView(b, offset, offset + 4);
+    return bd.getFloat32(0, Endian.little);
+  }
+
+  static int _toSigned16(int v) {
+    const signBit = 1 << 15;
+    return (v & (signBit - 1)) - (v & signBit);
+  }
+
+  static int _toSigned24(int v) {
+    const signBit = 1 << 23;
+    return (v & (signBit - 1)) - (v & signBit);
+  }
+
+  static int _toSigned32(int v) {
+    const signBit = 1 << 31;
+    return (v & (signBit - 1)) - (v & signBit);
   }
 }

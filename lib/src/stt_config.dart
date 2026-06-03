@@ -1,6 +1,6 @@
 import 'package:stt_flutter/src/device_utils.dart';
 
-enum SttModelType { whisper, sherpa, nemo, canary, voxtral }
+enum SttModelType { whisper, sherpa, nemo, canary }
 
 class SttConfig {
   final int sampleRate;

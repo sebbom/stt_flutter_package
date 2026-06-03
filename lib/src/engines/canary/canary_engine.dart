@@ -1,45 +1,38 @@
-import 'dart:io';
 import 'package:sherpa_onnx/sherpa_onnx.dart';
 import '../../stt_result.dart';
 import '../../cancellation_token.dart';
 import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
-import '../inference_engine.dart';
+import '../offline_engine_base.dart';
 
-class CanaryInferenceEngine implements InferenceEngine {
-  OfflineRecognizer? _recognizer;
+class CanaryInferenceEngine extends OfflineEngineBase {
+  String? _lastConfiguredLang;
 
-  CanaryInferenceEngine();
+  CanaryInferenceEngine(super.model);
 
-  String _findFile(Map<String, String> files, List<String> patterns) {
-    for (final p in patterns) {
-      if (files.containsKey(p)) return files[p]!;
-    }
-    for (final p in patterns) {
-      for (final entry in files.entries) {
-        if (entry.key.contains(p)) return entry.value;
-      }
-    }
-    throw FileSystemException('Model file not found for patterns: $patterns');
-  }
+  @override
+  bool get supportsExplicitLanguage => true;
 
   @override
   Future<void> load(Map<String, String> modelFiles) async {
-    final encoder = _findFile(modelFiles, ['encoder.onnx', 'encoder']);
-    final decoder = _findFile(modelFiles, ['decoder.onnx', 'decoder']);
-    final tokens = _findFile(modelFiles, ['tokens.txt', 'tokens']);
+    final encoder = findFile(modelFiles, ['encoder.onnx', 'encoder']);
+    final decoder = findFile(modelFiles, ['decoder.onnx', 'decoder']);
+    final tokens = findFile(modelFiles, ['tokens.txt', 'tokens']);
+
+    final defaultLang = model.languages.isNotEmpty ? model.languages.first : '';
+    _lastConfiguredLang = defaultLang;
 
     final config = OfflineRecognizerConfig(
       model: OfflineModelConfig(
         canary: OfflineCanaryModelConfig(
           encoder: encoder,
           decoder: decoder,
-          srcLang: 'en',
-          tgtLang: 'en',
+          srcLang: defaultLang,
+          tgtLang: defaultLang,
           usePnc: true,
         ),
         tokens: tokens,
-        numThreads: _optimalThreadCount(),
+        numThreads: OfflineEngineBase.optimalThreadCount(),
         provider: 'cpu',
         debug: false,
         modelType: 'canary',
@@ -47,40 +40,47 @@ class CanaryInferenceEngine implements InferenceEngine {
       decodingMethod: 'greedy_search',
     );
 
-    _recognizer = OfflineRecognizer(config);
-    SttLogger.d('CanaryInferenceEngine: loaded canary model');
+    setRecognizer(OfflineRecognizer(config));
+    SttLogger.d(
+      'CanaryInferenceEngine: loaded canary model (${model.id}); '
+      'default lang=$defaultLang',
+    );
   }
 
   @override
-  Future<SttResult> transcribe(AudioBuffer audio,
-      {String? language, CancellationToken? token}) async {
+  Future<SttResult> transcribe(
+    AudioBuffer audio, {
+    String? language,
+    CancellationToken? token,
+  }) async {
     final stopwatch = Stopwatch()..start();
-    final recognizer = _recognizer;
-    if (recognizer == null) {
-      throw StateError('CanaryInferenceEngine not loaded');
-    }
-
+    final rec = recognizer;
     token?.throwIfCancelled();
 
-    final stream = recognizer.createStream();
+    final effective = (language != null && language.isNotEmpty)
+        ? language
+        : (_lastConfiguredLang ?? '');
+
+    warnIfLanguageUnsupported(
+      effective.isEmpty ? null : effective,
+      supportsExplicitLanguage: supportsExplicitLanguage,
+    );
+
+    final stream = rec.createStream();
     try {
-      if (language != null && language.isNotEmpty) {
-        stream.setOption(key: 'srcLang', value: language);
-        stream.setOption(key: 'tgtLang', value: language);
+      if (effective.isNotEmpty && effective != _lastConfiguredLang) {
+        stream.setOption(key: 'srcLang', value: effective);
+        stream.setOption(key: 'tgtLang', value: effective);
       }
       stream.acceptWaveform(samples: audio.samples, sampleRate: audio.sampleRate);
-      recognizer.decode(stream);
-      final result = recognizer.getResult(stream);
-      final text = result.text;
-
+      rec.decode(stream);
+      final result = rec.getResult(stream);
       stopwatch.stop();
-      SttLogger.d(
-          'Canary result: "$text" in ${stopwatch.elapsedMilliseconds}ms');
-
+      SttLogger.d('Canary result: "${result.text}" in ${stopwatch.elapsedMilliseconds}ms');
       return SttResult(
-        text: text,
+        text: result.text,
         inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
-        lang: result.lang.isNotEmpty ? result.lang : null,
+        lang: result.lang.isNotEmpty ? result.lang : effective,
       );
     } finally {
       stream.free();
@@ -88,16 +88,5 @@ class CanaryInferenceEngine implements InferenceEngine {
   }
 
   @override
-  Future<void> dispose() async {
-    _recognizer?.free();
-    _recognizer = null;
-  }
-
-  static int _optimalThreadCount() {
-    final cores = Platform.numberOfProcessors;
-    if (cores >= 8) return 4;
-    if (cores >= 6) return 3;
-    if (cores >= 4) return 2;
-    return 1;
-  }
+  Future<void> dispose() async => freeRecognizer();
 }

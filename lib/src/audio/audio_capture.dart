@@ -6,15 +6,23 @@ import 'package:stt_flutter/src/stt_logger.dart';
 class AudioCaptureService {
   final AudioRecorder _recorder = AudioRecorder();
   StreamSubscription<Uint8List>? _streamSubscription;
+  StreamController<Float32List>? _chunkController;
   bool _isRecording = false;
 
   static const int sampleRate = 16000;
   static const int numChannels = 1;
 
-  Future<bool> hasPermission({bool request = true}) => _recorder.hasPermission(request: request);
+  /// Stream of mono 16 kHz Float32 audio chunks.
+  Stream<Float32List> get audioStream =>
+      _chunkController?.stream ?? const Stream.empty();
 
-  Future<void> startRecording(Function(List<int>) onAudioData) async {
+  Future<bool> hasPermission({bool request = true}) =>
+      _recorder.hasPermission(request: request);
+
+  Future<void> startRecording() async {
     if (_isRecording) return;
+    await _chunkController?.close();
+    _chunkController = StreamController<Float32List>();
 
     final stream = await _recorder.startStream(const RecordConfig(
       sampleRate: sampleRate,
@@ -26,7 +34,10 @@ class AudioCaptureService {
     SttLogger.d('AudioCapture started');
 
     _streamSubscription = stream.listen((audioData) {
-      onAudioData(_bytesToInt16List(audioData));
+      final floats = bytesToFloat32(audioData);
+      if (!_chunkController!.isClosed) {
+        _chunkController!.add(floats);
+      }
     });
   }
 
@@ -36,6 +47,8 @@ class AudioCaptureService {
     _streamSubscription = null;
     await _recorder.stop();
     _isRecording = false;
+    await _chunkController?.close();
+    _chunkController = null;
     SttLogger.d('AudioCapture stopped');
   }
 
@@ -52,18 +65,23 @@ class AudioCaptureService {
   Future<void> dispose() async {
     await _streamSubscription?.cancel();
     if (_isRecording) await _recorder.stop();
+    await _chunkController?.close();
+    _chunkController = null;
     await _recorder.dispose();
   }
 
-  List<int> _bytesToInt16List(Uint8List bytes) {
-    final values = <int>[];
-    for (var i = 0; i < bytes.length; i += 2) {
-      if (i + 1 < bytes.length) {
-        final sample = bytes[i] | (bytes[i + 1] << 8);
-        values.add(sample);
-      }
+  /// Convert raw PCM 16-bit little-endian bytes to a normalized Float32List.
+  /// Visible for testing.
+  static Float32List bytesToFloat32(Uint8List bytes) {
+    final n = bytes.length ~/ 2;
+    final out = Float32List(n);
+    for (var i = 0; i < n; i++) {
+      final lo = bytes[i * 2];
+      final hi = bytes[i * 2 + 1];
+      final s = (lo | (hi << 8)).toSigned(16);
+      out[i] = s / 32768.0;
     }
-    return values;
+    return out;
   }
 
   bool get isRecording => _isRecording;
