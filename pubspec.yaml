@@ -1,6 +1,6 @@
 name: stt_flutter
-description: Fully local, on-device speech-to-text using ONNX models (Whisper, Sherpa, Voxtral) via flutter_onnxruntime.
-version: 0.1.0
+description: Fully local, on-device speech-to-text using ONNX models (Whisper, Sherpa, Voxtral, Kroko, Parakeet) via flutter_onnxruntime & sherpa_onnx.
+version: 0.2.0
 repository: https://github.com/sebbom/stt_flutter_package
 
 environment:
@@ -16,6 +16,9 @@ dependencies:
   archive: ^4.0.0
   file: ^7.0.0
   crypto: ^3.0.0
+  path: ^1.9.0
+  record: ^5.2.0
+  device_info_plus: ^11.0.0
 
 dev_dependencies:
   flutter_test:

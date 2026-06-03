@@ -1325,9 +1325,29 @@ With these improvements, `stt_flutter` could become the **definitive Flutter pac
 
 ---
 
-### Phase 4: Testing & Documentation (1-2 weeks)
+### Phase 5: Update of the architecture — ✅ Complete
 
-### Phase 5: Update of the architecture
+**New services implemented on branch `vibe/phase5-hybrid-architecture`:**
+
+| Component | File | Status |
+|-----------|------|--------|
+| Model configuration | `lib/config/models.dart` | ✅ |
+| Device capability detection | `lib/services/utils/device_utils.dart` | ✅ |
+| STT configuration | `lib/config/stt_config.dart` | ✅ |
+| Model downloader | `lib/services/models/model_downloader.dart` | ✅ |
+| Model manager | `lib/services/models/model_manager.dart` | ✅ |
+| Model loader | `lib/services/models/model_loader.dart` | ✅ |
+| Language detection (LID) | `lib/services/lid/language_detector.dart` | ✅ |
+| Model switcher | `lib/services/stt/model_switcher.dart` | ✅ |
+| Transcription service | `lib/services/stt/transcription_service.dart` | ✅ |
+| Audio capture (streaming) | `lib/services/audio/audio_capture.dart` | ✅ |
+| Voice activity detection | `lib/services/audio/vad.dart` | ✅ |
+| Error handler with fallbacks | `lib/services/stt/error_handler.dart` | ✅ |
+| Benchmark service | `lib/services/testing/benchmark_service.dart` | ✅ |
+| STT engine wrapper | `lib/services/stt/stt_engine.dart` | ✅ |
+| Pubspec deps added | `record`, `device_info_plus`, `path` | ✅ |
+
+**Design guide follows below:**
 # Flutter STT: Dynamic Switching & Hybrid Architecture Implementation Guide
 
 *A comprehensive guide to implementing a production-ready, multi-model speech-to-text system in Flutter with ONNX Runtime, featuring dynamic language detection, model switching, and hybrid fallback strategies.*
