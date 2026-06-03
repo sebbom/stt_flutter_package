@@ -1,5 +1,5 @@
 import 'package:path/path.dart' as p;
-import 'package:stt_flutter/config/models.dart';
+import 'package:stt_flutter/src/config/models.dart';
 import 'package:stt_flutter/src/stt_logger.dart';
 
 class ModelLoader {

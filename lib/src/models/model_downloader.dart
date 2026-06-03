@@ -2,10 +2,10 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:stt_flutter/config/models.dart';
+import 'package:stt_flutter/src/config/models.dart';
 import 'package:stt_flutter/src/stt_logger.dart';
 
-class ModelDownloader {
+class SherpaModelDownloader {
   static const String _baseUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download';
 
   static final Map<String, String> _modelUrls = {

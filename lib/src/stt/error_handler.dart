@@ -1,7 +1,7 @@
-import 'package:stt_flutter/config/models.dart';
+import 'package:stt_flutter/src/config/models.dart';
 import 'package:stt_flutter/src/stt_logger.dart';
-import 'package:stt_flutter/services/models/model_manager.dart';
-import 'package:stt_flutter/services/stt/model_switcher.dart';
+import 'package:stt_flutter/src/models/model_manager.dart';
+import 'package:stt_flutter/src/stt/model_switcher.dart';
 
 class SttErrorHandler {
   final ModelManager _modelManager;

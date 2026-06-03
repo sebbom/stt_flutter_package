@@ -1,10 +1,10 @@
 import 'package:path/path.dart' as p;
-import 'package:stt_flutter/config/models.dart';
+import 'package:stt_flutter/src/config/models.dart';
 import 'package:stt_flutter/src/stt_logger.dart';
-import 'package:stt_flutter/services/models/model_downloader.dart';
+import 'package:stt_flutter/src/models/model_downloader.dart';
 
 class ModelManager {
-  final ModelDownloader _downloader = ModelDownloader();
+  final SherpaModelDownloader _downloader = SherpaModelDownloader();
   final Map<String, bool> _loadedModels = {};
   final Map<String, dynamic> _modelInstances = {};
   int _availableMemoryMB = 0;

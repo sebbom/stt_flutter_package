@@ -1,4 +1,4 @@
-import 'package:stt_flutter/services/models/model_manager.dart';
+import 'package:stt_flutter/src/models/model_manager.dart';
 
 class SttEngineService {
   final ModelManager _modelManager;

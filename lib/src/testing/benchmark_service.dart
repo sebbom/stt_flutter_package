@@ -1,5 +1,5 @@
-import 'package:stt_flutter/config/models.dart';
-import 'package:stt_flutter/services/models/model_manager.dart';
+import 'package:stt_flutter/src/config/models.dart';
+import 'package:stt_flutter/src/models/model_manager.dart';
 
 class BenchmarkService {
   final ModelManager _modelManager;

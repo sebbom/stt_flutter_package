@@ -1,9 +1,9 @@
 import 'dart:io';
-import 'package:stt_flutter/config/models.dart';
+import 'package:stt_flutter/src/config/models.dart';
 import 'package:stt_flutter/src/stt_logger.dart';
-import 'package:stt_flutter/services/audio/audio_capture.dart';
-import 'package:stt_flutter/services/lid/language_detector.dart';
-import 'package:stt_flutter/services/stt/model_switcher.dart';
+import 'package:stt_flutter/src/audio/audio_capture.dart';
+import 'package:stt_flutter/src/language_detector.dart';
+import 'package:stt_flutter/src/stt/model_switcher.dart';
 
 class TranscriptionService {
   final ModelSwitcher _modelSwitcher;
