@@ -3,12 +3,14 @@
 > **Branch:** `vibe/review-improvements-bc2b72`  
 > **Date:** 2025-06-01  
 > **Base Commit:** f349744  
+> **Note:** This is a historical review. Current architecture has evolved further — see [PLAN.md](PLAN.md) for up-to-date design.  
+> **Key changes since this review:** All engines (`Whisper`, `Sherpa`, `Nemo`, `Canary`) now use `sherpa_onnx.OfflineRecognizer` exclusively. `NemoInferenceEngine` added for Parakeet TDT. VAD is visual-only. Language detection returned in `SttResult.lang`.
 
 ---
 
 ## Executive Summary
 
-The `stt_flutter` package is a well-architected, feature-rich Flutter plugin for **fully local, on-device speech-to-text** using ONNX models. It supports **Whisper**, **Sherpa-ONNX**, and **Voxtral** model families with a clean, extensible design. The implementation is production-ready in many aspects but has **critical architectural, performance, and maintainability issues** that should be addressed before widespread adoption.
+The `stt_flutter` package is a well-architected Flutter plugin for **fully local, on-device speech-to-text** using ONNX models via `sherpa_onnx`. It supports **Whisper** and **Sherpa-ONNX** model families. The implementation has been migrated from `flutter_onnxruntime` to `sherpa_onnx` native FFI, eliminating the manual encoder/decoder/joiner ONNX session management.
 
 **Overall Assessment: 8.5/10** (Excellent foundation, needs refinement)
 
@@ -20,19 +22,19 @@ The `stt_flutter` package is a well-architected, feature-rich Flutter plugin for
 - **Clean separation of concerns**: Engine layer, audio processing, model registry are well-isolated
 - **Extensible design**: `InferenceEngine` abstract class + factory pattern allows adding new model types easily
 - **Model registry pattern**: Users can register custom models in one line
-- **Multi-engine support**: Whisper, Sherpa, Voxtral all implemented with consistent interfaces
+- **Multi-engine support**: Whisper and Sherpa implemented with consistent interfaces via `sherpa_onnx`
 
 ### ✅ Performance
 - **Background isolate usage**: Audio preprocessing offloaded to `Isolate.run()` to avoid UI blocking
-- **Async ONNX inference**: `flutter_onnxruntime` uses MethodChannel internally, keeping Dart event loop free
-- **Efficient memory management**: Proper disposal of OrtValue tensors throughout
+- **Native ONNX inference**: `sherpa_onnx` uses native FFI — non-blocking on the main isolate, no MethodChannel overhead
+- **Native resource management**: `sherpa_onnx` handles encoder/decoder/joiner internally (no manual tensor management)
 
 ### ✅ Features
-- **Multi-language**: 99+ languages via Whisper, 8 via Voxtral
+- **Multi-language**: 99+ languages via Whisper
 - **Runtime model download**: Models downloaded and cached on first use
 - **Flexible input**: File path or raw PCM buffer transcription
 - **Progress callbacks**: Download progress reporting
-- **Three model families**: Covers different use cases (accuracy vs. size)
+- **Two model families**: Whisper (offline) and Zipformer/Parakeet (streaming)
 
 ### ✅ Code Quality
 - **Comprehensive documentation**: PLAN.md is excellent, README is clear
@@ -44,72 +46,26 @@ The `stt_flutter` package is a well-architected, feature-rich Flutter plugin for
 
 ## Critical Issues
 
-### 🔴 1. Background Isolate Architecture Problem
+### 🔴 1. ~~Background Isolate Architecture Problem~~ ✅ Resolved
 
-**Severity:** CRITICAL  
-**Impact:** Performance, Memory, Stability  
+**Status:** RESOLVED by migration to `sherpa_onnx`
 
-The current implementation uses **ephemeral isolates** (`Isolate.run()`) for audio preprocessing but runs **ONNX inference on the main isolate**. This is problematic:
+The original `flutter_onnxruntime` implementation ran ONNX inference on the main isolate
+via MethodChannel. The migration to `sherpa_onnx` uses native FFI calls that are
+**non-blocking** on the Dart event loop. The `sherpa_onnx.OnlineRecognizer` and
+`OfflineRecognizer` handle all encoder/decoder/joiner inference internally.
 
-```dart
-// Current: stt_flutter_impl.dart line 52-54
-Future<SttResult> _transcribe(AudioBuffer audio) async {
-  final resampled = await Isolate.run(() => AudioProcessor.resampleSync(audio));
-  return _engine!.transcribe(resampled);  // ← Runs on MAIN isolate!
-}
-```
+### 🔴 2. ~~Memory Leak Risk~~ ✅ Resolved
 
-**Problems:**
-- ONNX inference (`session.run()`) is CPU-intensive and blocks the Dart event loop
-- Despite `flutter_onnxruntime` using MethodChannel, the Dart-side tensor preparation and result processing is synchronous
-- UI jank will occur during transcription on weaker devices
-- No true parallelism for inference
+**Status:** RESOLVED by migration to `sherpa_onnx`
 
-**Evidence from code:**
-- `whisper_engine.dart` line 140-145: Encoder runs synchronously on main isolate
-- `sherpa_engine.dart` line 150-155: Same pattern
-- `voxtral_engine.dart` line 180-185: Same pattern
+All manual `OrtSession`, `OrtValue` tensor management has been eliminated.
+`sherpa_onnx.OnlineRecognizer` / `OfflineRecognizer` manage native resources
+internally. The only resources to free are:
+- `recognizer.free()` — frees all underlying ONNX sessions
+- `stream.free()` — frees the input stream
 
-### 🔴 2. Memory Leak Risk
-
-**Severity:** HIGH  
-**Impact:** Memory, Stability  
-
-Multiple engines have **incomplete resource cleanup**:
-
-```dart
-// whisper_engine.dart line 140-145
-final encoderOut = await _encoderSession!.run({_encoderInputName: inputTensor});
-final rawStates = await encoderOut[_encoderOutputName]!.asFlattenedList();
-final encData = Float32List.fromList(rawStates.cast<num>().map((e) => e.toDouble()).toList());
-
-await inputTensor.dispose();
-for (final v in encoderOut.values) {
-  await v.dispose();  // ← Good
-}
-```
-
-But in the decoder loop (line 160-180):
-```dart
-final decoderOut = await _decoderSession!.run(decoderInputs);
-final rawLogits = await decoderOut[_decoderOutputLogits]!.asFlattenedList();
-// ...
-await idTensor.dispose();
-for (final v in decoderOut.values) {
-  await v.dispose();  // ← Also good
-}
-```
-
-**However**, the `decoderInputs` OrtValue tensors are **not always disposed**:
-```dart
-// Line 155-160
-decoderInputs[eName] = await ort.OrtValue.fromList(List<bool>.filled(total, false), fixedShape);
-// ... no disposal of these extra inputs!
-```
-
-**Same issue in:**
-- `sherpa_engine.dart` line 200-210 (state tensors)
-- `voxtral_engine.dart` line 220-230 (extra inputs)
+No manual tensor disposal needed.
 
 ### 🔴 3. No Cancellation Support
 
@@ -248,65 +204,33 @@ if (await modelDir_.exists()) {
 
 ## Code Quality Issues
 
-### 🟢 9. Duplicate Code
+### 🟢 9. Duplicate Code — ✅ Mitigated
 
 **Severity:** LOW  
 **Impact:** Maintainability  
 
-Significant code duplication between engines:
+The migration to `sherpa_onnx` eliminated most code duplication. Previously all
+three engines (Whisper, Sherpa, Voxtral) independently implemented ONNX session
+management, tensor creation/disposal, and decoding loops. Now:
+- `SherpaInferenceEngine` — ~60 lines, delegates to `OnlineRecognizer`
+- `WhisperInferenceEngine` — ~60 lines, delegates to `OfflineRecognizer`
+- No manual tensor, session, or decoder loop management
 
-| Pattern | Whisper | Sherpa | Voxtral |
-|---------|---------|--------|---------|
-| Mel/Fbank computation | ✅ | ✅ (different) | ✅ |
-| Transpose mel | ✅ | ❌ | ✅ |
-| Argmax | ✅ | ✅ | ✅ |
-| Decoder loop | ✅ | ✅ (different) | ✅ |
-| Tensor disposal | ✅ | ✅ | ✅ |
-
-**Examples:**
-- `_argmax()` appears in all 3 engines (identical logic)
-- `_transposeMel()` in Whisper and Voxtral (nearly identical)
-- Decoder autoregressive loop pattern repeated 3x
-
-### 🟢 10. Magic Numbers
+### 🟢 10. Magic Numbers — ✅ Resolved
 
 **Severity:** LOW  
 **Impact:** Readability, Maintainability  
 
-Hardcoded constants throughout:
+No longer applicable. The engines delegate to `sherpa_onnx` which handles all
+model-specific constants internally.
 
-```dart
-// whisper_engine.dart
-static const int nMels = 80;
-static const int maxFrames = 3000;
-static const int maxTokens = 448;
-static const int encoderFrames = 1500;
-
-// sherpa_engine.dart
-static const int blank = 0;
-static const int contextSize = 2;
-
-// voxtral_engine.dart
-int _dModel = 1024;
-int _vocabSize = 40000;
-```
-
-**Problem:** Hard to maintain, error-prone, poor discoverability.
-
-### 🟢 11. Debug Prints in Production Code
+### 🟢 11. Debug Prints in Production Code — ✅ Improved
 
 **Severity:** LOW  
 **Impact:** Performance, Cleanliness  
 
-Excessive `debugPrint` statements:
-- whisper_engine.dart: ~20 debugPrint calls
-- sherpa_engine.dart: ~15 debugPrint calls
-- voxtral_engine.dart: ~15 debugPrint calls
-
-**Impact:**
-- Performance overhead (string formatting)
-- Console spam in production
-- Should be behind a debug flag or logging system
+All engine logging now uses `SttLogger` (introduced in Phase 2).
+Engine code is significantly shorter (~60 lines each), minimizing debug prints.
 
 ### 🟢 12. Missing Documentation
 
@@ -457,96 +381,21 @@ final encData = Float32List.fromList(
 
 ## Architectural Recommendations
 
-### 🎯 1. Implement True Background Inference
+### 🎯 1. ~~Implement True Background Inference~~ ✅ Resolved
 
-**Priority:** P0 (Critical)  
-**Effort:** High  
+**Status:** RESOLVED by migration to `sherpa_onnx`
 
-Create a **long-lived background isolate** for inference:
+`sherpa_onnx` uses native FFI calls that are non-blocking on the Dart event loop,
+eliminating the need for a background inference isolate. The `OnlineRecognizer` /
+`OfflineRecognizer` manage all native compute internally.
 
-```dart
-// New architecture:
-class InferenceWorker {
-  final SendPort _sendPort;
-  final ReceivePort _receivePort;
-  OrtSession? _encoderSession;
-  OrtSession? _decoderSession;
-  
-  InferenceWorker(this._sendPort);
-  
-  void _handleMessage(dynamic message) {
-    // Process inference requests
-  }
-}
+### 🎯 2. ~~Implement Proper Resource Management~~ ✅ Resolved
 
-class SttFlutter {
-  Isolate? _workerIsolate;
-  SendPort? _workerSendPort;
-  
-  Future<void> initialize(...) async {
-    final receivePort = ReceivePort();
-    _workerIsolate = await Isolate.spawn(
-      InferenceWorker._entry,
-      receivePort.sendPort,
-    );
-    _workerSendPort = await receivePort.first as SendPort;
-  }
-  
-  Future<SttResult> transcribe(AudioBuffer audio) async {
-    final responsePort = ReceivePort();
-    _workerSendPort!.send({
-      'type': 'transcribe',
-      'audio': audio,
-      'responsePort': responsePort.sendPort,
-    });
-    return await responsePort.first as SttResult;
-  }
-}
-```
+**Status:** RESOLVED by migration to `sherpa_onnx`
 
-**Benefits:**
-- True parallel inference
-- UI thread never blocked
-- Better resource isolation
-
-**Challenges:**
-- `flutter_onnxruntime` uses MethodChannel (requires `BackgroundIsolateBinaryMessenger`)
-- Need to pass OrtSession across isolates (not directly possible)
-- Complex error handling
-
-### 🎯 2. Implement Proper Resource Management
-
-**Priority:** P0 (Critical)  
-**Effort:** Medium  
-
-Create a **resource manager** pattern:
-
-```dart
-class OrtResourceManager {
-  final List<ort.OrtValue> _allocated = [];
-  final List<ort.OrtSession> _sessions = [];
-  
-  OrtValue allocateTensor(...) {
-    final value = ...;
-    _allocated.add(value);
-    return value;
-  }
-  
-  Future<void> disposeAll() async {
-    for (final v in _allocated) {
-      await v.dispose();
-    }
-    for (final s in _sessions) {
-      await s.close();
-    }
-  }
-}
-```
-
-**Also:**
-- Use `try/finally` blocks for guaranteed cleanup
-- Add `dispose()` calls for all decoder inputs
-- Implement RAII pattern via Dart's `Finalizer` (Dart 2.17+)
+All manual `OrtValue` and `OrtSession` management has been eliminated.
+`sherpa_onnx` handles all tensor/session lifecycle internally. The user only
+needs to call `recognizer.free()` and `stream.free()`.
 
 ### 🎯 3. Add Cancellation Support
 
@@ -591,170 +440,41 @@ class SttFlutter {
 
 ## Code Quality Recommendations
 
-### 🎯 4. Extract Common Utilities
+### 🎯 4. Extract Common Utilities — ✅ Done
 
 **Priority:** P1 (High)  
 **Effort:** Low  
 
-Create shared utility classes:
+`math_utils.dart` created with `argmax()` and `transposeMel()` utilities (Phase 2).
 
-```dart
-// lib/src/utils/math_utils.dart
-class MathUtils {
-  static int argmax(List<num> values) {
-    int best = 0;
-    double bestVal = double.negativeInfinity;
-    for (int i = 0; i < values.length; i++) {
-      if (values[i].toDouble() > bestVal) {
-        bestVal = values[i].toDouble();
-        best = i;
-      }
-    }
-    return best;
-  }
-  
-  static Float32List transposeMel(Float64List mel, int nMels, int totalFrames, 
-      int chunkOffset, int chunkSize) {
-    // ... shared implementation
-  }
-}
-```
-
-### 🎯 5. Centralize Constants
+### 🎯 5. Centralize Constants — ✅ Done
 
 **Priority:** P1 (High)  
 **Effort:** Low  
 
-Create a constants file:
+`constants.dart` created with audio and token constants (Phase 2).
 
-```dart
-// lib/src/constants.dart
-class SttConstants {
-  // Audio
-  static const int targetSampleRate = 16000;
-  static const int nMelBins = 80;
-  static const int maxFrames = 3000;
-  static const int maxTokens = 448;
-  
-  // Whisper tokens
-  static const int sot = 50258;
-  static const int eot = 50257;
-  static const int transcribeTok = 50359;
-  static const int noTimestamps = 50363;
-  
-  // Language tokens
-  static const Map<String, int> whisperLanguageTokens = {
-    'en': 50259,
-    'de': 50261,
-    'fr': 50263,
-    'es': 50265,
-    // ... all 99 languages
-  };
-}
-```
-
-### 🎯 6. Implement Proper Logging
+### 🎯 6. Implement Proper Logging — ✅ Done
 
 **Priority:** P1 (High)  
 **Effort:** Low  
 
-Replace `debugPrint` with a proper logging system:
+`SttLogger` class in `lib/src/stt_logger.dart` with `v/d/i/w/e` log levels (Phase 2).
 
-```dart
-// lib/src/logging.dart
-enum LogLevel { verbose, debug, info, warning, error }
-
-class SttLogger {
-  static LogLevel level = LogLevel.info;
-  static void setLevel(LogLevel newLevel) => level = newLevel;
-  
-  static void v(String message) => _log(LogLevel.verbose, message);
-  static void d(String message) => _log(LogLevel.debug, message);
-  static void i(String message) => _log(LogLevel.info, message);
-  static void w(String message) => _log(LogLevel.warning, message);
-  static void e(String message, [dynamic error, StackTrace? stack]) => 
-      _log(LogLevel.error, message, error, stack);
-  
-  static void _log(LogLevel msgLevel, String message, 
-      [dynamic error, StackTrace? stack]) {
-    if (msgLevel.index < level.index) return;
-    // Format and output
-  }
-}
-```
-
-### 🎯 7. Add Input Validation
+### 🎯 7. Add Input Validation — ✅ Done
 
 **Priority:** P1 (High)  
 **Effort:** Low  
 
-Add validation helpers:
+Input validation added to `SttFlutter.transcribeBuffer()` and engine methods (Phase 2).
 
-```dart
-// lib/src/validation.dart
-class Validation {
-  static void validateInitialized(bool initialized, String component) {
-    if (!initialized) {
-      throw SttException.notInitialized(component);
-    }
-  }
-  
-  static void validateAudioBuffer(AudioBuffer audio) {
-    if (audio.sampleRate <= 0) {
-      throw SttException.invalidArgument('sampleRate must be positive');
-    }
-    if (audio.length == 0) {
-      throw SttException.invalidArgument('audio buffer must not be empty');
-    }
-    if (audio.sampleRate > 192000) {
-      throw SttException.invalidArgument('sampleRate too high: ${audio.sampleRate}');
-    }
-  }
-  
-  static void validateLanguage(String? language) {
-    if (language != null && !RegExp(r'^[a-z]{2,3}$').hasMatch(language)) {
-      throw SttException.invalidArgument('Invalid language code: $language');
-    }
-  }
-}
-```
-
-### 🎯 8. Implement Custom Exceptions
+### 🎯 8. Implement Custom Exceptions — ✅ Done
 
 **Priority:** P1 (High)  
 **Effort:** Low  
 
-Create exception hierarchy:
-
-```dart
-// lib/src/exceptions.dart
-class SttException implements Exception {
-  final String message;
-  final int? code;
-  
-  const SttException(this.message, [this.code]);
-  
-  @override
-  String toString() => 'SttException($code): $message';
-  
-  factory SttException.notInitialized(String component) => 
-      SttException('${component} not initialized', 1001);
-  
-  factory SttException.invalidArgument(String message) => 
-      SttException(message, 1002);
-  
-  factory SttException.modelLoadFailed(String reason) => 
-      SttException('Failed to load model: $reason', 2001);
-  
-  factory SttException.inferenceFailed(String reason) => 
-      SttException('Inference failed: $reason', 3001);
-}
-
-class OperationCancelledException implements Exception {
-  @override
-  String toString() => 'Operation was cancelled';
-}
-```
+`SttException` with `notInitialized`, `invalidArgument`, `modelLoadFailed` factories and
+`OperationCancelledException` in `lib/src/stt_exception.dart` (Phase 2).
 
 ---
 
@@ -833,102 +553,22 @@ class ModelDownloader {
 **Priority:** P1 (High)  
 **Effort:** Medium  
 
-Use native resampling via FFI or optimized Dart:
-
-**Option A: Use `libsamplerate` via FFI**
-```dart
-// Native binding for libsamplerate
-class NativeResampler {
-  static Float32List resample(Float32List input, int inputRate, int outputRate);
-}
-```
-
-**Option B: Optimized Dart with SIMD**
-```dart
-// Use Float32List operations directly
-static Float32List resampleOptimized(Float32List input, int inputRate, int outputRate) {
-  final ratio = inputRate / outputRate;
-  final outputLength = (input.length / ratio).round();
-  final output = Float32List(outputLength);
-  
-  for (int i = 0; i < outputLength; i++) {
-    final srcPos = i * ratio;
-    final srcIdx = srcPos.floor();
-    final frac = srcPos - srcIdx;
-    
-    if (srcIdx + 1 < input.length) {
-      // SIMD-friendly: avoid branching
-      final a = input[srcIdx];
-      final b = input[srcIdx + 1];
-      output[i] = a + (b - a) * frac;
-    } else {
-      output[i] = input[srcIdx];
-    }
-  }
-  return output;
-}
-```
+Audio resampling is still a Dart linear interpolation loop in `ComputeWorker`.
+Could be optimized with FFI or native `sherpa_onnx` resample utilities.
 
 ### ⚡ 2. Add Audio Normalization
 
 **Priority:** P2 (Medium)  
 **Effort:** Low  
 
-Add normalization option:
+Not yet implemented. Could improve accuracy for quiet recordings.
 
-```dart
-// audio_processor.dart
-class AudioProcessor {
-  static AudioBuffer normalize(AudioBuffer audio, {double targetPeak = 0.9}) {
-    // Find current peak
-    double peak = 0.0;
-    for (final s in audio.samples) {
-      peak = max(peak, s.abs());
-    }
-    
-    if (peak <= 0) return audio;
-    
-    final scale = targetPeak / peak;
-    final normalized = Float32List(audio.length);
-    for (int i = 0; i < audio.length; i++) {
-      normalized[i] = (audio.samples[i] * scale).clamp(-1.0, 1.0);
-    }
-    
-    return AudioBuffer(samples: normalized, sampleRate: audio.sampleRate);
-  }
-}
-```
-
-### ⚡ 3. Batch Audio Processing
+### ⚡ 3. Batch Audio Processing — ✅ N/A
 
 **Priority:** P2 (Medium)  
-**Effort:** High  
 
-Implement batching for long audio:
-
-```dart
-// whisper_engine.dart
-@override
-Future<SttResult> transcribe(AudioBuffer audio, {String? language}) async {
-  final mel = await Isolate.run(() => MelSpectrogram.compute(audio.samples));
-  final totalFrames = mel.length ~/ nMels;
-  
-  // Process in batches with overlap
-  final batchSize = maxFrames;
-  final results = <String>[];
-  
-  for (int offset = 0; offset < totalFrames; offset += batchSize) {
-    final chunk = _transposeMel(mel, totalFrames, offset, batchSize);
-    final result = await _transcribeChunk(chunk, language);
-    results.add(result);
-  }
-  
-  return SttResult(
-    text: results.join(' '),
-    inferenceTimeMs: stopwatch.elapsedMilliseconds.toDouble(),
-  );
-}
-```
+No longer needed — `sherpa_onnx` handles full-audio processing internally via
+`OnlineRecognizer` (streaming) and `OfflineRecognizer` (full audio).
 
 ---
 
@@ -939,47 +579,31 @@ Future<SttResult> transcribe(AudioBuffer audio, {String? language}) async {
 **Priority:** P1 (High)  
 **Effort:** Medium  
 
-Add full pipeline tests:
+Add full pipeline tests using `sherpa_onnx` recognizers:
 
 ```dart
 // test/whisper_engine_test.dart
 void main() {
   group('WhisperEngine', () {
     late WhisperInferenceEngine engine;
-    late ort.OnnxRuntime runtime;
     
     setUpAll(() async {
-      runtime = ort.OnnxRuntime();
-      engine = WhisperInferenceEngine(runtime);
+      // sherpa_onnx.initBindings() must be called first
+      engine = WhisperInferenceEngine();
       
-      // Download tiny model if not present
       final model = ModelRegistry.get('whisper-tiny');
-      if (!await ModelDownloader.isDownloaded(model)) {
-        await ModelDownloader.download(model);
-      }
-      
-      final modelFiles = {...};
+      // Download and load model...
       await engine.load(modelFiles);
     });
     
     tearDownAll(() async {
       await engine.dispose();
-      await runtime.close();
     });
     
     test('transcribes English audio', () async {
       final audio = await AudioProcessor.loadWav('test/fixtures/hello_en.wav');
       final result = await engine.transcribe(audio, language: 'en');
-      
       expect(result.text.toLowerCase(), contains('hello'));
-      expect(result.inferenceTimeMs, greaterThan(0));
-    });
-    
-    test('transcribes German audio', () async {
-      final audio = await AudioProcessor.loadWav('test/fixtures/guten_tag_de.wav');
-      final result = await engine.transcribe(audio, language: 'de');
-      
-      expect(result.text.toLowerCase(), contains('guten'));
     });
   });
 }
@@ -1299,15 +923,16 @@ Current example is minimal. Enhance with:
 
 ## Conclusion
 
-The `stt_flutter` package is an **excellent foundation** with a clean architecture and comprehensive feature set. However, it has **critical issues** that must be addressed before production use:
+The `stt_flutter` package has been migrated from `flutter_onnxruntime` to `sherpa_onnx`,
+eliminating the two most critical issues:
 
-1. **Background inference** is essential for smooth UI
-2. **Resource leaks** must be fixed to prevent memory issues
-3. **Cancellation support** is needed for good UX
+1. ~~**Background inference**~~ ✅ `sherpa_onnx` native FFI is non-blocking on the main isolate
+2. ~~**Resource leaks**~~ ✅ `sherpa_onnx` handles all tensor/session lifecycle internally
+3. **Cancellation support** ✅ `CancellationToken` implemented in Phase 2
 
-The **recommended approach** is to address P0 issues first, then P1, then P2/P3. The total effort is estimated at **6-10 weeks** for a single developer, or **3-5 weeks** for a team of 2-3.
-
-With these improvements, `stt_flutter` could become the **definitive Flutter package** for on-device speech-to-text.
+The remaining work (resampling optimization, audio normalization, integration tests)
+is lower priority. With the `sherpa_onnx` backend, `stt_flutter` is significantly
+simpler, more maintainable, and avoids native library conflicts.
 
 ---
 

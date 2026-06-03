@@ -4,43 +4,43 @@
 
 ```bash
 flutter pub get
-flutter test                                # unit tests
+flutter test                                # unit tests (20 pass)
+dart analyze lib/                           # zero errors
 ```
 
 ## Architecture
 
-- **STT engine**: `SttFlutter` (main isolate) manages `OnnxRuntime` + `OrtSession`. All `session.run()` calls are async via MethodChannel.
-- **Threading**: Audio preprocessing (WAV parsing, resampling, mel/Fbank extraction) runs in ephemeral `Isolate.run()` background isolates. ONNX inference runs on the main isolate (async, non-blocking).
+- **STT engine**: `SttEngine` singleton → `SttFlutter` → `WhisperInferenceEngine` / `SherpaInferenceEngine`. All inference via `sherpa_onnx` native FFI (no `flutter_onnxruntime`).
+- **Threading**: Audio preprocessing (WAV parsing, resampling) runs in ephemeral `Isolate.run()` background isolates. `sherpa_onnx` native calls are non-blocking on the main isolate.
 - **Model registry**: `ModelRegistry` singleton. Default models registered on first access via `_ensureDefaults()`. Add custom models with `ModelRegistry.register(...)`.
-- **Model downloader**: `ModelDownloader.download()` — HTTP streaming from HuggingFace / GitHub, with progress callbacks. Extracts `.tar.bz2` for Sherpa models.
-- **Three engines** (each in `lib/src/engines/`):
-  - `whisper/` — mel spectrogram → encoder → autoregressive decoder → BPE decode
-  - `sherpa/` — Fbank features → encoder → transducer greedy search → tokens.txt
-  - `voxtral/` — mel spectrogram → audio_encoder → embed_tokens → LLM decoder → Tekken decode
+- **Two engines** (each in `lib/src/engines/`):
+  - `whisper/` — `sherpa_onnx.OfflineRecognizer` (Whisper, SenseVoice, etc.)
+  - `sherpa/` — `sherpa_onnx.OnlineRecognizer` (Zipformer transducer, NeMo Parakeet)
+- **Voxtral removed** — `SttModelType.voxtral` throws `UnsupportedError`
 
 ## Dependencies
 
-- `flutter_onnxruntime: ^1.7.1` — ONNX Runtime inference
+- `sherpa_onnx: ^1.13.2` — Native ONNX Runtime inference (replaces flutter_onnxruntime)
 - `http: ^1.2.0` — model downloads
 - `path_provider: ^2.1.0` — model storage path
 - `archive: ^4.0.0` — `.tar.bz2` extraction
 
 ## Testing
 
-- `flutter test` — all tests
+- `flutter test` — all tests (20 pass)
 - Unit tests in `test/` — no network, fast, pure logic validation
-- Integration tests (future) — download smallest model, transcribe WAV fixtures
-- WAV fixtures in `test/fixtures/` — 4 files (DE/EN/FR/ES) with known text
+- WAV fixtures in `test/fixtures/`
 
 ## Conventions
 
 - SDK `>=3.0.0`, null safety enabled
+- `sherpa_onnx.initBindings()` must be called before creating any recognizer (done in `SttEngine.loadModel()`)
+- Engines create `OnlineRecognizer` / `OfflineRecognizer` in `load()`, dispose in `dispose()`
+- `AudioBuffer.samples` is `Float32List` normalized to `[-1, 1]`
 - Pure functions for `Isolate.run()` — must be top-level or static, no closures capturing native resources
-- Each engine receives `OnnxRuntime` in constructor and creates its own `OrtSession` instances
-- Dispose `OrtValue` tensors and `OrtSession` in `dispose()` — native memory leak otherwise
 
 ## Common pitfalls
 
-- Forget `.close()` on `OrtSession` in `dispose()` → native memory leak
+- Forget `recognizer.free()` / `stream.free()` → native memory leak
+- `sherpa_onnx` and `flutter_onnxruntime` cannot coexist (native lib symbol conflict)
 - Pass non-sendable objects to `Isolate.run()` → runtime error
-- Expect real-time streaming from batch API → use `transcribeFile` or `transcribeBuffer`

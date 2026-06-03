@@ -1,6 +1,6 @@
 # `stt_flutter` — Architecture & Implementation Plan
 
-Fully local, on-device speech-to-text for Flutter using ONNX models via `flutter_onnxruntime`.
+Fully local, on-device speech-to-text for Flutter using ONNX models via `sherpa_onnx`.
 
 ---
 
@@ -10,53 +10,40 @@ Fully local, on-device speech-to-text for Flutter using ONNX models via `flutter
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Main Isolate (UI)                           │
 │                                                                   │
-│  SttFlutter                                                       │
-│    ├─ manages OnnxRuntime + OrtSession(s)                        │
-│    ├─ all session.run() calls are async (MethodChannel → native)  │
-│    │                                                              │
-│    ├─ transcribeFile(path)                                        │
-│    │   ├─ AudioProcessor.loadWav()    (async I/O, main isolate)   │
-│    │   ├─ Isolate.run(resampleSync)   (ephemeral bg isolate)      │
-│    │   └─ engine.transcribe(audio)                                │
-│    │       ├─ Isolate.run(mel/fbank)  (ephemeral bg isolate)      │
-│    │       └─ session.run() × N      (async MethodChannel)        │
-│    │                                                              │
-│    └─ dispose() → sessions.close()                               │
+│  SttEngine (singleton)                                            │
+│    └─ SttFlutter                                                  │
+│         ├─ WhisperInferenceEngine  (OfflineRecognizer, whisper)    │
+│         ├─ SherpaInferenceEngine   (OfflineRecognizer, zipformer2) │
+│         ├─ NemoInferenceEngine     (OfflineRecognizer, nemo_trans) │
+│         └─ CanaryInferenceEngine   (OfflineRecognizer, canary)     │
 │                                                                   │
-│  ┌───────────────────────────────────────────────────────────┐   │
-│  │  Engine Layer (main isolate)                               │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐               │   │
-│  │  │ Whisper  │  │  Sherpa  │  │ Voxtral  │               │   │
-│  │  └──────────┘  └──────────┘  └──────────┘               │   │
-│  └───────────────────────────────────────────────────────────┘   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │  Isolate.spawn / Isolate.run
-                         │  (ephemeral, one per preprocess call)
-┌────────────────────────▼────────────────────────────────────────┐
-│              Ephemeral Background Isolates                        │
-│  (short-lived, terminated after each preprocessing task)          │
-│    ┌────────────────┐   ┌──────────────────┐                     │
-│    │ resampleSync() │   │ MelSpectrogram   │                     │
-│    │                │   │ .compute()        │                     │
-│    └────────────────┘   └──────────────────┘                     │
-└──────────────────────────────────────────────────────────────────┘
+│  All inference: native sherpa_onnx FFI — non-blocking on main    │
+│                                                                   │
+│  Audio preprocessing                                              │
+│    ├─ AudioProcessor.loadWav()       (async I/O, main isolate)    │
+│    ├─ Isolate.run(resampleSync)      (ephemeral bg isolate)       │
+│    └─ AudioBuffer → engine.transcribe(audio)                      │
+│         └─ sherpa_onnx native FFI — non-blocking                  │
+│                                                                   │
+│  Audio capture (streaming)                                        │
+│    ├─ AudioCaptureService            (record package)             │
+│    ├─ VadEngine                      (energy or Silero VAD)      │
+│    └─ TranscriptionService           (per-chunk processing)       │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **Why not a long-lived background isolate:**
-`flutter_onnxruntime` v1.7.1 uses `MethodChannel` internally. In Flutter 3.44,
-`BackgroundIsolateBinaryMessenger` is library-private (under `_`) and not
-exported from any barrel file, making it inaccessible. However, all
-`session.run()` calls are async via `MethodChannel` — they do **not** block
-the Dart event loop. The only CPU-bound work is audio preprocessing (WAV
-parsing, resampling, mel/Fbank extraction), which is offloaded to ephemeral
-`Isolate.run()` calls. Model inference itself runs asynchronously on the main
-isolate without blocking.
+`sherpa_onnx` uses native FFI calls that do **not** block the Dart event loop.
+Audio preprocessing (resampling) is offloaded to ephemeral `Isolate.run()` calls.
+The native `OfflineRecognizer` handles all ONNX Runtime
+management internally — no manual session or tensor management needed.
 
-**Ephemeral isolates:** Audio preprocessing functions are pure functions
-(stateless, no native resources) — perfect for `Isolate.run()` (Dart 2.19+).
-Each call spawns a short-lived isolate, processes the data, returns the result,
-and terminates. This avoids the `BackgroundIsolateBinaryMessenger`
-compatibility issue while keeping the UI thread free during computation.
+**Native sherpa_onnx benefits:**
+- No `flutter_onnxruntime` dependency (eliminates native library conflicts)
+- `initBindings()` loads the shared library once globally
+- `OfflineRecognizer` manages encoder/decoder/joiner internally
+- Built-in support for Zipformer transducer, NeMo Parakeet, Whisper, Paraformer, CTC, Canary, and more
 
 ---
 
@@ -66,7 +53,7 @@ Users register any ONNX model in one line. The package ships with seeded models.
 
 ```dart
 // --- Core types ---
-enum SttModelType { whisper, sherpa, voxtral }
+enum SttModelType { whisper, sherpa, nemo, canary, voxtral }  // voxtral → UnsupportedError
 
 class ModelDescriptor {
   final String id;                // "whisper-tiny", "sherpa-zipformer-en"
@@ -127,14 +114,17 @@ map in `engine_factory.dart`.
 | `whisper-large-v3` | Whisper | 99 langs | HF ONNX | ~4.5 GB |
 | `whisper-large-v3-turbo` | Whisper | 99 langs | HF ONNX | ~2.5 GB |
 | `sherpa-zipformer-en` | Sherpa | en | k2-fsa GH | ~35 MB |
-| `voxtral-mini` | Voxtral | en,de,fr,es,pt,hi,nl,it | HF ONNX | ~2.7 GB |
+| `parakeet-tdt-0.6b-multilingual` | NeMo Parakeet | 25 langs | HF ONNX | ~400 MB |
+| `canary-180m-flash` | Canary | en | HF ONNX | ~180 MB |
 
-Each `ModelDescriptor` encodes the exact file list and URLs. Sherpa models are
-downloaded as `.tar.bz2` and extracted via `package:archive`.
+Sherpa models are downloaded as `.tar.bz2` and extracted via `package:archive`.
+Whisper, Parakeet, Nemo, and Canary models use sherpa-onnx's individual-file ONNX format.
 
 ---
 
 ## Model Download System
+
+Two downloaders coexist for different model sources:
 
 ```dart
 class ModelDownloader {
@@ -155,14 +145,11 @@ class ModelDownloader {
 }
 ```
 
-- Uses the `http` package (streaming downloads with progress)
-- Sherpa: downloads `.tar.bz2` → extracts to model directory
-- Whisper / Voxtral: downloads individual ONNX files from HuggingFace
-- Progress reported via `SendPort` to main isolate for UI updates
+- `ModelDownloader` — downloads from HuggingFace / GitHub via `http` package, with SHA256 verification
 
 ---
 
-## Engine Interface (runs on background isolate)
+## Engine Interface
 
 ```dart
 abstract class InferenceEngine {
@@ -172,7 +159,7 @@ abstract class InferenceEngine {
   /// Transcribe audio and return text.
   Future<SttResult> transcribe(AudioBuffer audio, {String? language});
 
-  /// Release all native resources (sessions, tensors).
+  /// Release all native resources (recognizer, streams).
   Future<void> dispose();
 }
 
@@ -185,6 +172,7 @@ class AudioBuffer {
 class SttResult {
   final String text;
   final double inferenceTimeMs;
+  final String? lang;  // detected language (Whisper, Canary)
 }
 ```
 
@@ -192,30 +180,20 @@ class SttResult {
 
 ## Whisper Engine
 
-**Files needed:** `encoder.onnx`, `decoder.onnx`, `tokenizer.json`
+**Files needed:** `encoder.onnx`, `decoder.onnx`, `tokens.txt`
+
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'whisper'`.
 
 ```
-WAV file ──► resample to 16kHz mono ──► log-mel spectrogram (80 bins)
-     ──► encoder ONNX ──► audio embeddings
-     ──► build decoder prompt [sot, lang, transcribe, notimestamps]
-     ──► decoder autoregressive loop with KV cache ──► token IDs
-     ──► BPE tokenizer.decode(text) ──► text
+WAV file ──► resample to 16kHz mono ──► OfflineStream.acceptWaveform()
+     ──► OfflineRecognizer.decode(stream)
+     ──► OfflineRecognizer.getResult(stream).text
 ```
 
 | Sub-component | File | Responsibility |
 |---------------|------|----------------|
-| `mel_spectrogram.dart` | `MelSpectrogram` | Hann STFT (400/160), 80 mel filterbanks, log10 normalization, output `[1,80,3000]` |
-| `bpe_tokenizer.dart` | `BpeTokenizer` | Load `tiktoken`-format vocab, encode/decode BPE, handle special tokens |
-| `whisper_decoder.dart` | `WhisperDecoder` | Build SOT prompt, run encoder once, autoregressive loop with KV cache, EOT detection |
-| `whisper_engine.dart` | `WhisperInferenceEngine` | Orchestrates mel → enc → dec → tokenizer → text |
-
-**KV cache management:** The decoder expects `past_self_key_0..N`,
-`past_self_value_0..N`, `cross_key_0..N`, `cross_value_0..N` tensors. First call
-has empty caches (zero-length). Each iteration updates them. All managed as
-`OrtValue` objects in the background isolate.
-
-**Language support:** SOT prompt includes language token (e.g. `<|de|>` for
-German). The multilingual BPE tokenizer handles all 99 Whisper languages.
+| `whisper_engine.dart` | `WhisperInferenceEngine` | Loads model → creates `OfflineRecognizer` → feeds stream → returns text |
+| | | Language support via `OfflineWhisperModelConfig.language` |
 
 ---
 
@@ -223,59 +201,71 @@ German). The multilingual BPE tokenizer handles all 99 Whisper languages.
 
 **Files needed:** `encoder.onnx`, `decoder.onnx`, `joiner.onnx`, `tokens.txt`
 
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'zipformer2'`.
+
 ```
-WAV file ──► resample to 16kHz mono ──► Fbank features (80-dim, 25ms, 10ms)
-     ──► encoder ONNX ──► acoustic embeddings
-     ──► transducer greedy search:
-         for each frame t:
-           h = encoder[t]
-           for each step:
-             logits = joiner(h, decoder(prev_token))
-             if argmax(logits) == blank: break
-             else: emit token, set prev_token = token
-     ──► lookup tokens.txt ──► text
+WAV file ──► resample to 16kHz mono ──► OfflineStream.acceptWaveform()
+     ──► OfflineRecognizer.decode(stream)
+     ──► OfflineRecognizer.getResult(stream).text
 ```
 
 | Sub-component | File | Responsibility |
 |---------------|------|----------------|
-| `fbank_extractor.dart` | `FbankExtractor` | 25ms Hamming window, 80 mel filterbanks, CMVN normalization |
-| `transducer_decoder.dart` | `TransducerDecoder` | Greedy search: for each frame, iterate joiner(encoder[h], decoder[prev]) until blank |
-| `sherpa_engine.dart` | `SherpaInferenceEngine` | Orchestrates fbank → enc → joiner-decoder → tokens.txt → text |
+| `sherpa_engine.dart` | `SherpaInferenceEngine` | Loads model → creates `OfflineRecognizer` → feeds stream → returns text |
+
+The `OfflineRecognizer` internally handles:
+- Fbank feature extraction
+- Encoder forward pass
+- Transducer greedy search (joiner + decoder)
+- Token lookup via `tokens.txt`
 
 ---
 
-## Voxtral Engine
+## NeMo Parakeet Engine
 
-**Files needed:** `audio_encoder.onnx`, `decoder_model_merged.onnx`,
-`embed_tokens.onnx`, `tokenizer.json`
+**Files needed:** `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt`
+
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'nemo_transducer'`.
 
 ```
-WAV file ──► resample to 16kHz mono ──► log-mel spectrogram (128 bins)
-     ──► audio_encoder ONNX ──► audio embeddings
-     ──► embed_tokens ONNX ──► text embeddings for prompt template
-     ──► combine embeddings ──► inputs_embeds
-     ──► decoder_model_merged autoregressive loop with KV cache
-     ──► Tekken tokenizer.decode(text) ──► text
+WAV file ──► resample to 16kHz mono ──► OfflineStream.acceptWaveform()
+     ──► OfflineRecognizer.decode(stream)
+     ──► OfflineRecognizer.getResult(stream).text
 ```
 
 | Sub-component | File | Responsibility |
 |---------------|------|----------------|
-| `tekken_tokenizer.dart` | `TekkenTokenizer` | Load `tokenizer.json` (HF format), encode/decode Tekken BPE |
-| `voxtral_decoder.dart` | `VoxtralDecoder` | Build prompt with `[INST] lang:xx [TRANSCRIBE]`, combine audio + text embeddings, autoregressive LLM loop |
-| `voxtral_engine.dart` | `VoxtralInferenceEngine` | Orchestrates mel → audio_enc → embed → decoder → tokenizer → text |
+| `nemo_engine.dart` | `NemoInferenceEngine` | Loads model → creates `OfflineRecognizer` → feeds stream → returns text |
 
-**Prompt template:** `<s>[INST]<audio_placeholder><text_instruction>[/INST]`
-where `<audio_placeholder>` = projected audio embeddings and
-`<text_instruction>` = e.g. `lang:de [TRANSCRIBE]`.
+---
+
+## Canary Engine
+
+**Files needed:** `encoder.onnx`, `decoder.onnx`, `tokens.txt`
+
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'canary'`.
+Supports source/target language via `OfflineCanaryModelConfig.srcLang` / `tgtLang`
+(dynamically set at transcribe time via `stream.setOption()`).
+
+```
+WAV file ──► resample to 16kHz mono ──► OfflineStream.acceptWaveform()
+     ──► OfflineRecognizer.decode(stream)
+     ──► OfflineRecognizer.getResult(stream).text
+     ──► OfflineRecognizerResult.lang   (detected language)
+```
+
+| Sub-component | File | Responsibility |
+|---------------|------|----------------|
+| `canary_engine.dart` | `CanaryInferenceEngine` | Loads model → creates `OfflineRecognizer` → feeds stream → returns text + lang |
 
 ---
 
 ## Public API
 
 ```dart
-/// Main entry point. Runs on the main isolate, delegates to background worker.
+/// Main entry point. Runs on the main isolate, delegates to native sherpa_onnx.
 class SttFlutter {
-  /// Initialize: spawns background isolate, loads ONNX sessions.
+  /// Initialize: loads model files, creates sherpa_onnx recognizer.
   Future<void> initialize({
     required ModelDescriptor model,
     String? modelDir,   // defaults to {appDocDir}/stt_models/{model.id}
@@ -288,8 +278,19 @@ class SttFlutter {
   /// Transcribe raw PCM [samples] (Float32, [-1.0, 1.0]) at [sampleRate] Hz.
   Future<SttResult> transcribeBuffer(Float32List samples, int sampleRate);
 
-  /// Release all resources and kill the background isolate.
+  /// Release all resources.
   Future<void> dispose();
+}
+
+/// Singleton convenience wrapper around SttFlutter.
+class SttEngine {
+  static SttEngine get instance;
+  void loadModel(ModelDescriptor model, {String? modelDir, String? language});
+  Future<SttResult> transcribeFile(String path, {String? language});
+  Future<SttResult> transcribeBuffer(Float32List samples, int sampleRate, {String? language});
+  void cancel();
+  Future<void> destroy();
+  bool get isReady;
 }
 ```
 
@@ -303,51 +304,42 @@ lib/
 ├── src/
 │   ├── stt_flutter_impl.dart              # SttFlutter (main isolate facade)
 │   ├── stt_config.dart                    # SttModelType, SttConfig
-│   ├── stt_result.dart                    # SttResult
-│   ├── isolate_worker.dart                # InferenceWorker (bg isolate)
+│   ├── stt_result.dart                    # SttResult (text, inferenceTimeMs, lang)
+│   ├── stt_logger.dart                    # Structured logging
+│   ├── stt_exception.dart                 # Custom exception types
+│   ├── cancellation_token.dart            # CancellationToken
+│   ├── compute_worker.dart                # ComputeWorker (bg isolate for resample)
 │   ├── model_registry.dart                # ModelRegistry, ModelDescriptor
-│   ├── model_downloader.dart              # HTTP download + progress
+│   ├── model_downloader.dart              # HTTP download + progress + tar.bz2 extract
+│   ├── stt/
+│   │   └── stt_engine.dart                # SttEngine (singleton, initBindings)
 │   ├── audio/
 │   │   ├── audio_buffer.dart              # AudioBuffer data class
-│   │   └── audio_processor.dart           # Resample, normalize, WAV parse
+│   │   ├── audio_processor.dart           # Resample, normalize, WAV parse
+│   │   ├── audio_capture.dart             # Streaming audio capture (record package)
+│   │   └── vad.dart                       # SherpaOnnxVadEngine wrapper
 │   ├── engines/
 │   │   ├── inference_engine.dart          # Abstract InferenceEngine
 │   │   ├── engine_factory.dart            # SttModelType → InferenceEngine
 │   │   ├── whisper/
-│   │   │   ├── whisper_engine.dart
-│   │   │   ├── mel_spectrogram.dart
-│   │   │   ├── whisper_decoder.dart
-│   │   │   └── bpe_tokenizer.dart
+│   │   │   └── whisper_engine.dart        # OfflineRecognizer, modelType: 'whisper'
 │   │   ├── sherpa/
-│   │   │   ├── sherpa_engine.dart
-│   │   │   ├── fbank_extractor.dart
-│   │   │   └── transducer_decoder.dart
-│   │   └── voxtral/
-│   │       ├── voxtral_engine.dart
-│   │       ├── voxtral_decoder.dart
-│   │       └── tekken_tokenizer.dart
+│   │   │   └── sherpa_engine.dart         # OfflineRecognizer, modelType: 'zipformer2'
+│   │   ├── canary/
+│   │   │   └── canary_engine.dart         # OfflineRecognizer, modelType: 'canary'
+│   │   └── nemo/
+│   │       └── nemo_engine.dart           # OfflineRecognizer, modelType: 'nemo_transducer'
 │   └── default_models/
-│       ├── whisper_models.dart            # All 10 Whisper variants
-│       ├── sherpa_models.dart             # Zipformer EN
-│       └── voxtral_models.dart            # Voxtral Mini q4f16
+│       ├── whisper_models.dart            # All 10 Whisper variants (FP32 HF)
+│       ├── sherpa_models.dart             # Zipformer EN (tar.bz2) + Parakeet TDT (HF)
+│       └── canary_models.dart             # Canary 180M Flash (HF)
 test/
-├── units/
-│   ├── audio_processor_test.dart
-│   ├── bpe_tokenizer_test.dart
-│   ├── tekken_tokenizer_test.dart
-│   ├── mel_spectrogram_test.dart
-│   ├── fbank_extractor_test.dart
-│   ├── transducer_decoder_test.dart
-│   ├── whisper_decoder_test.dart
-│   └── model_registry_test.dart
-├── engines/
-│   ├── whisper_engine_test.dart
-│   └── sherpa_engine_test.dart
+├── stt_flutter_test.dart
+├── model_registry_test.dart
+├── mel_spectrogram_test.dart
+├── audio_processor_test.dart
 └── fixtures/
-    ├── hello_en.wav
-    ├── guten_tag_de.wav
-    ├── bonjour_fr.wav
-    └── hola_es.wav
+    └── hello_en.wav
 example/
 ├── pubspec.yaml
 ├── lib/
@@ -365,11 +357,14 @@ example/
 dependencies:
   flutter:
     sdk: flutter
-  flutter_onnxruntime: ^1.7.1   # ONNX Runtime inference
+  sherpa_onnx: ^1.13.2          # Native ONNX inference (replaces flutter_onnxruntime)
   http: ^1.2.0                  # Model downloads
   path_provider: ^2.1.0         # Model storage path
   archive: ^4.0.0               # .tar.bz2 extraction (Sherpa models)
   file: ^7.0.0                  # File utilities
+  record: ^7.0.0                # Audio capture
+  device_info_plus: ^11.0.0     # Device capability detection
+  crypto: ^3.0.0                # SHA256 verification
 
 dev_dependencies:
   flutter_test:
@@ -384,19 +379,15 @@ dev_dependencies:
 | # | Step | Files | Verification |
 |---|------|-------|-------------|
 | 1 | Project scaffold | `pubspec.yaml`, `analysis_options.yaml`, `lib/stt_flutter.dart` | `flutter pub get` |
-| 2 | Model descriptors | `model_registry.dart`, `whisper_models.dart`, `sherpa_models.dart`, `voxtral_models.dart` | `flutter test` (registry unit tests) |
+| 2 | Model descriptors | `model_registry.dart`, `whisper_models.dart`, `sherpa_models.dart` | `flutter test` (registry unit tests) |
 | 3 | Model downloader | `model_downloader.dart` | Unit test with mock HTTP |
 | 4 | Audio processing | `audio_buffer.dart`, `audio_processor.dart` | Unit test with known WAV files |
-| 5 | Background isolate | `isolate_worker.dart`, `stt_flutter_impl.dart` | Integration test (spawn + hello) |
-| 6 | Whisper mel + tokenizer | `mel_spectrogram.dart`, `bpe_tokenizer.dart` | Unit tests against known values |
-| 7 | Whisper decoder + engine | `whisper_decoder.dart`, `whisper_engine.dart` | Integration test: download tiny model, transcribe 4 languages |
-| 8 | Sherpa fbank + decoder | `fbank_extractor.dart`, `transducer_decoder.dart` | Unit tests |
-| 9 | Sherpa engine | `sherpa_engine.dart` | Integration test: download zipformer, transcribe EN |
-| 10 | Voxtral tokenizer + decoder | `tekken_tokenizer.dart`, `voxtral_decoder.dart` | Unit tests |
-| 11 | Voxtral engine | `voxtral_engine.dart` | Integration test (optional, very large model) |
-| 12 | Engine factory wiring | `engine_factory.dart`, `stt_flutter.dart` exports | All tests pass |
-| 13 | Example app | `main.dart`, `model_selection_screen.dart`, `transcription_screen.dart` | `flutter run` on device |
-| 14 | Test fixtures WAVs | 4 WAV files in `test/fixtures/` | Generated with `ffmpeg` TTS |
+| 5 | Sherpa engine | `engines/sherpa/sherpa_engine.dart` | Integration test: download zipformer, transcribe EN |
+| 6 | Whisper engine | `engines/whisper/whisper_engine.dart` | Integration test: download tiny model, transcribe |
+| 7 | Engine factory wiring | `engine_factory.dart`, `stt_flutter_impl.dart`, `stt_flutter.dart` exports | All tests pass |
+| 8 | Singleton SttEngine | `stt/stt_engine.dart` | Works end-to-end |
+| 9 | Streaming + VAD | `audio/audio_capture.dart`, `audio/vad.dart` | Real-time recording test |
+| 10 | Example app | `main.dart`, `model_selection_screen.dart`, `transcription_screen.dart` | `flutter run` on device |
 
 ---
 
@@ -405,16 +396,5 @@ dev_dependencies:
 | Test | Type | Verifies |
 |------|------|----------|
 | `audio_processor_test.dart` | Unit | WAV parsing, resample to 16kHz, PCM normalization |
-| `mel_spectrogram_test.dart` | Unit | Shape `[1,80,3000]`, values in expected range |
-| `fbank_extractor_test.dart` | Unit | Shape matches, compares against reference impl |
-| `bpe_tokenizer_test.dart` | Unit | Encode/decode roundtrip, special tokens |
-| `tekken_tokenizer_test.dart` | Unit | Encode/decode roundtrip with Voxtral vocab |
-| `transducer_decoder_test.dart` | Unit | Greedy search on dummy logits, blank handling |
-| `whisper_decoder_test.dart` | Unit | Autoregressive loop on dummy logits, EOT detection |
 | `model_registry_test.dart` | Unit | Register, lookup, available, duplicates |
-| `whisper_engine_test.dart` | Integration | Download tiny model, transcribe DE/EN/FR/ES fixtures, verify text contains expected words |
-| `sherpa_engine_test.dart` | Integration | Download zipformer, transcribe EN fixture |
-
-Integration tests use `setUpAll` to download the smallest model variant once,
-then run multiple transcriptions. Tests skip gracefully if network is
-unavailable.
+| `stt_flutter_test.dart` | Unit | Registry, model descriptor validation |

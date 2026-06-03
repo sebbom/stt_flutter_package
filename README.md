@@ -1,9 +1,9 @@
 # stt_flutter
 
-Fully local, on-device speech-to-text for Flutter using ONNX models.
+Fully local, on-device speech-to-text for Flutter using `sherpa_onnx`.
 
-Runs inference on a **background isolate** so the UI thread is never blocked.
-Supports three model families — all ONNX, all via `flutter_onnxruntime`.
+Runs inference on the **main isolate** (native `sherpa_onnx` FFI calls are non-blocking).
+Supports four model families — all ONNX, all via `sherpa_onnx`.
 
 ---
 
@@ -11,10 +11,12 @@ Supports three model families — all ONNX, all via `flutter_onnxruntime`.
 
 - **Local only** — no network calls during transcription
 - **Multi-language** — German, English, French, Spanish (and 99+ more via Whisper)
-- **3 model families** — Whisper, Sherpa-ONNX, Voxtral (Mistral)
+- **4 model families** — Whisper, Sherpa-ONNX (Zipformer transducer), NeMo Parakeet, Canary
+- **Language detection** — detected language returned in `SttResult.lang` (Whisper, Canary, Parakeet)
 - **Runtime download** — models downloaded and cached on first use
 - **Extensible registry** — add any ONNX model in one line of code
-- **Background isolate** — all audio preprocessing and ONNX inference off the UI thread
+- **Native ONNX Runtime** — via `sherpa_onnx` (no `flutter_onnxruntime`)
+- **Silero VAD support** — optional `SherpaOnnxVadEngine` wrapper for speech/noise gating
 
 ---
 
@@ -41,6 +43,13 @@ print(result.text); // "Guten Tag, wie geht es Ihnen?"
 await stt.dispose();
 ```
 
+Or use the singleton `SttEngine` for repeated use:
+
+```dart
+await SttEngine.instance.loadModel(model);
+final result = await SttEngine.instance.transcribeFile('/path/to/audio.wav');
+```
+
 ---
 
 ## Seeded models
@@ -55,7 +64,8 @@ await stt.dispose();
 | `whisper-large-v3` | Whisper | 99 langs | ~4.5 GB |
 | `whisper-large-v3-turbo` | Whisper | 99 langs | ~2.5 GB |
 | `sherpa-zipformer-en` | Sherpa | en | ~35 MB |
-| `voxtral-mini` | Voxtral | 8 langs | ~2.7 GB |
+| `parakeet-tdt-0.6b-multilingual` | NeMo Parakeet | 25 langs | ~400 MB |
+| `canary-180m-flash` | Canary | en | ~180 MB |
 
 Add your own model:
 
@@ -77,12 +87,18 @@ ModelRegistry.register(ModelDescriptor(
 ## Architecture
 
 ```
-Main isolate                     Background isolate
-  SttFlutter ──SendPort──►      InferenceWorker
-                               ├─ WhisperEngine
-                               ├─ SherpaEngine
-                               └─ VoxtralEngine
+Main isolate
+  SttEngine (singleton)
+    └─ SttFlutter
+         ├─ WhisperInferenceEngine   (OfflineRecognizer, modelType: 'whisper')
+         ├─ SherpaInferenceEngine    (OfflineRecognizer, modelType: 'zipformer2')
+         ├─ NemoInferenceEngine      (OfflineRecognizer, modelType: 'nemo_transducer')
+         └─ CanaryInferenceEngine    (OfflineRecognizer, modelType: 'canary')
 ```
+
+All inference runs via `sherpa_onnx` native FFI. Audio preprocessing (resampling)
+runs in ephemeral `Isolate.run()` background isolates. `sherpa_onnx.initBindings()`
+is called once by `SttEngine` on first model load.
 
 See [PLAN.md](PLAN.md) for the full architecture document.
 
@@ -90,8 +106,9 @@ See [PLAN.md](PLAN.md) for the full architecture document.
 
 ## Requirements
 
-- Flutter 3.7+ (for background isolate channel support)
+- Flutter 3.7+
 - Dart 3.0+
+- Android minSdk 24, iOS 14+
 
 ---
 
