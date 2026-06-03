@@ -2,11 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
-import '../../stt_exception.dart';
 import '../../cancellation_token.dart';
+import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
 import '../../utils/math_utils.dart';
@@ -58,9 +57,9 @@ class WhisperInferenceEngine implements InferenceEngine {
     _decoderSession = await _runtime.createSession(modelFiles['decoder.onnx']!);
 
     final encInputs = await _encoderSession!.getInputInfo();
-    debugPrint('=== Encoder inputs ===');
+    SttLogger.d('=== Encoder inputs ===');
     for (final info in encInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (encInputs.isNotEmpty) {
       _encoderInputName = encInputs.first['name'] as String? ?? _encoderInputName;
@@ -69,27 +68,27 @@ class WhisperInferenceEngine implements InferenceEngine {
         nMels = (shape[1] as num).toInt();
         maxFrames = (shape[2] as num).toInt();
         encoderFrames = maxFrames ~/ 2;
-        debugPrint('  => encoder input: nMels=$nMels, maxFrames=$maxFrames, encoderFrames=$encoderFrames');
+        SttLogger.d('  => encoder input: nMels=$nMels, maxFrames=$maxFrames, encoderFrames=$encoderFrames');
       }
     }
     final encOutputs = await _encoderSession!.getOutputInfo();
-    debugPrint('=== Encoder outputs ===');
+    SttLogger.d('=== Encoder outputs ===');
     for (final info in encOutputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (encOutputs.isNotEmpty) {
       _encoderOutputName = encOutputs.first['name'] as String? ?? _encoderOutputName;
       final shape = encOutputs.first['shape'] as List<dynamic>?;
       if (shape != null && shape.length >= 3) {
         _dModel = (shape[2] as num).toInt();
-        debugPrint('  => d_model = $_dModel');
+        SttLogger.d('  => d_model = $_dModel');
       }
     }
 
     final decInputs = await _decoderSession!.getInputInfo();
-    debugPrint('=== Decoder inputs ===');
+    SttLogger.d('=== Decoder inputs ===');
     for (final info in decInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     for (final info in decInputs) {
       final name = info['name'] as String? ?? '';
@@ -102,9 +101,9 @@ class WhisperInferenceEngine implements InferenceEngine {
       }
     }
     final decOutputs = await _decoderSession!.getOutputInfo();
-    debugPrint('=== Decoder outputs ===');
+    SttLogger.d('=== Decoder outputs ===');
     for (final info in decOutputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (decOutputs.isNotEmpty) {
       _decoderOutputLogits = decOutputs.first['name'] as String? ?? _decoderOutputLogits;
@@ -117,12 +116,12 @@ class WhisperInferenceEngine implements InferenceEngine {
         for (final entry in (json as Map<String, dynamic>).entries) {
           _vocab![(entry.value as num).toInt()] = entry.key;
         }
-        debugPrint('  => vocab loaded: ${_vocab!.length} entries');
+        SttLogger.d('  => vocab loaded: ${_vocab!.length} entries');
       } catch (e) {
-        debugPrint('  => vocab load FAILED: $e');
+        SttLogger.d('  => vocab load FAILED: $e');
       }
     } else {
-      debugPrint('  => vocab.json NOT in modelFiles');
+      SttLogger.d('  => vocab.json NOT in modelFiles');
     }
   }
 
@@ -196,7 +195,7 @@ class WhisperInferenceEngine implements InferenceEngine {
     final langToken = _languageToken(language);
     final prompt = [sot, langToken, transcribeTok, noTimestamps];
 
-    debugPrint('=== transcribe: audio=${audio.length}samples, melFrames=$totalFrames, langToken=$langToken ===');
+    SttLogger.d('=== transcribe: audio=${audio.length}samples, melFrames=$totalFrames, langToken=$langToken ===');
 
     for (int offset = 0; offset < totalFrames && offset < maxFrames * 100; offset += maxFrames) {
       final chunk = transposeMel(mel, nMels, totalFrames, offset, maxFrames);
@@ -212,7 +211,7 @@ class WhisperInferenceEngine implements InferenceEngine {
       }
 
       token?.throwIfCancelled();
-      debugPrint('  encoder: offset=$offset, output=${encData.length} floats');
+      SttLogger.d('  encoder: offset=$offset, output=${encData.length} floats');
 
       final encTensor = await ort.OrtValue.fromList(encData, [1, encoderFrames, _dModel]);
       final tokens = <int>[...prompt];
@@ -227,6 +226,7 @@ class WhisperInferenceEngine implements InferenceEngine {
           _decoderInputStates: encTensor,
         };
         final extraTensors = <ort.OrtValue>[];
+        Map<String, ort.OrtValue>? decoderOut;
         try {
           for (final extra in _decoderExtraInputs) {
             final eName = extra['name'] as String? ?? '';
@@ -249,7 +249,7 @@ class WhisperInferenceEngine implements InferenceEngine {
             decoderInputs[eName] = tensor;
           }
 
-          final decoderOut = await _decoderSession!.run(decoderInputs);
+          decoderOut = await _decoderSession!.run(decoderInputs);
           final rawLogits = await decoderOut[_decoderOutputLogits]!.asFlattenedList();
 
           final vocabSize = rawLogits.length ~/ tokens.length;
@@ -260,22 +260,20 @@ class WhisperInferenceEngine implements InferenceEngine {
 
           final next = argmax(lastLogits);
 
-          await idTensor.dispose();
-          for (final v in decoderOut.values) {
-            await v.dispose();
-          }
-          for (final t in extraTensors) {
-            await t.dispose();
-          }
-
           if (next == eot) break;
           tokens.add(next);
 
           if (i < 20 || i % 50 == 0) {
             final partial = _decode(tokens.sublist(prompt.length));
-            debugPrint('  decoder step $i: token=$next, partial="$partial"');
+            SttLogger.d('decoder step $i: token=$next, partial="$partial"');
           }
         } finally {
+          await idTensor.dispose();
+          if (decoderOut != null) {
+            for (final v in decoderOut.values) {
+              await v.dispose();
+            }
+          }
           for (final t in extraTensors) {
             await t.dispose();
           }
@@ -285,7 +283,7 @@ class WhisperInferenceEngine implements InferenceEngine {
       await encTensor.dispose();
 
       final text = _decode(tokens.sublist(prompt.length));
-      debugPrint('  chunk text: "$text" (${tokens.length - prompt.length} tokens)');
+      SttLogger.d('  chunk text: "$text" (${tokens.length - prompt.length} tokens)');
       if (text.isNotEmpty) {
         if (fullText.isNotEmpty) fullText.write(' ');
         fullText.write(text);
@@ -293,7 +291,7 @@ class WhisperInferenceEngine implements InferenceEngine {
     }
 
     stopwatch.stop();
-    debugPrint('=== result: "${fullText.toString()}" in ${stopwatch.elapsedMilliseconds}ms ===');
+    SttLogger.d('=== result: "${fullText.toString()}" in ${stopwatch.elapsedMilliseconds}ms ===');
     return SttResult(
       text: fullText.toString(),
       inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,

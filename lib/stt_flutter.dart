@@ -1,9 +1,9 @@
-library stt_flutter;
-
 export 'src/stt_config.dart';
 export 'src/stt_result.dart';
 export 'src/stt_exception.dart';
+export 'src/stt_logger.dart';
 export 'src/cancellation_token.dart';
+export 'src/compute_worker.dart';
 export 'src/stt_flutter_impl.dart';
 export 'src/model_registry.dart';
 export 'src/model_downloader.dart';

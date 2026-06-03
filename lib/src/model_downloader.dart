@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import '../stt_flutter.dart';
 
 class ModelDownloader {
@@ -25,6 +26,7 @@ class ModelDownloader {
         await _downloadFile(
           url: file.url,
           destPath: destPath,
+          sha256: file.sha256,
           onProgress: (received, total) {
             onFileProgress?.call(file.filename, received, total);
           },
@@ -55,11 +57,12 @@ class ModelDownloader {
   static Future<void> _downloadFile({
     required String url,
     required String destPath,
+    String? sha256,
     void Function(int received, int total)? onProgress,
   }) async {
     final response = await http.Client().send(http.Request('GET', Uri.parse(url)));
     if (response.statusCode != 200) {
-      throw HttpException('Download failed: ${response.statusCode} $url');
+      throw SttException.downloadFailed('HTTP ${response.statusCode} for $url');
     }
 
     final total = response.contentLength ?? -1;
@@ -78,11 +81,27 @@ class ModelDownloader {
 
     if (total > 0 && received != total) {
       await file.delete();
-      throw Exception(
-        'Download incomplete: $received of $total bytes. '
-        'Connection may have dropped. Please retry.',
+      throw SttException.downloadFailed(
+        'Incomplete: $received of $total bytes. Connection may have dropped. Please retry.',
       );
     }
+
+    if (sha256 != null) {
+      final fileHash = await _computeSha256(destPath);
+      if (fileHash != sha256) {
+        await file.delete();
+        throw SttException.downloadFailed(
+          'SHA256 mismatch for ${file.path}. Expected $sha256, got $fileHash',
+        );
+      }
+      SttLogger.d('SHA256 verified for ${file.path}');
+    }
+  }
+
+  static Future<String> _computeSha256(String path) async {
+    final file = File(path);
+    final bytes = await file.readAsBytes();
+    return sha256.convert(bytes).toString();
   }
 
   static Future<void> _extractTarBz2(String archivePath, String destDir) async {

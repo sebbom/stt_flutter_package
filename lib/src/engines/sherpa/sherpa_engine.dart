@@ -2,10 +2,10 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' show min;
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
 import '../../cancellation_token.dart';
+import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
 import '../../audio/fbank.dart';
@@ -58,17 +58,17 @@ class SherpaInferenceEngine implements InferenceEngine {
 
     // Detect encoder input/output names
     final encInputs = await _encoderSession!.getInputInfo();
-    debugPrint('=== Sherpa Encoder inputs ===');
+    SttLogger.d('=== Sherpa Encoder inputs ===');
     for (final info in encInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (encInputs.isNotEmpty) {
       _encInput = (encInputs.first['name'] as String?) ?? _encInput;
     }
     final encOutputs = await _encoderSession!.getOutputInfo();
-    debugPrint('=== Sherpa Encoder outputs ===');
+    SttLogger.d('=== Sherpa Encoder outputs ===');
     for (final info in encOutputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (encOutputs.isNotEmpty) {
       _encOutput = (encOutputs.first['name'] as String?) ?? _encOutput;
@@ -76,9 +76,9 @@ class SherpaInferenceEngine implements InferenceEngine {
 
     // Detect decoder input/output names
     final decInputs = await _decoderSession!.getInputInfo();
-    debugPrint('=== Sherpa Decoder inputs ===');
+    SttLogger.d('=== Sherpa Decoder inputs ===');
     for (final info in decInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     // Find the main input (y / input_ids / tokens)
     for (final info in decInputs) {
@@ -90,9 +90,9 @@ class SherpaInferenceEngine implements InferenceEngine {
       }
     }
     final decOutputs = await _decoderSession!.getOutputInfo();
-    debugPrint('=== Sherpa Decoder outputs ===');
+    SttLogger.d('=== Sherpa Decoder outputs ===');
     for (final info in decOutputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (decOutputs.isNotEmpty) {
       _decOutput = (decOutputs.first['name'] as String?) ?? _decOutput;
@@ -100,9 +100,9 @@ class SherpaInferenceEngine implements InferenceEngine {
 
     // Detect joiner input/output names
     final joinInputs = await _joinerSession!.getInputInfo();
-    debugPrint('=== Sherpa Joiner inputs ===');
+    SttLogger.d('=== Sherpa Joiner inputs ===');
     for (final info in joinInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     final names = joinInputs.map((i) => (i['name'] as String?) ?? '').toList();
     if (names.length >= 2) {
@@ -131,9 +131,9 @@ class SherpaInferenceEngine implements InferenceEngine {
             _tokens![int.parse(parts[0])] = parts.sublist(1).join(' ');
           }
         }
-        debugPrint('  => tokens loaded: ${_tokens!.length} entries');
+        SttLogger.d('  => tokens loaded: ${_tokens!.length} entries');
       } catch (e) {
-        debugPrint('  => tokens load FAILED: $e');
+        SttLogger.d('  => tokens load FAILED: $e');
       }
     }
   }
@@ -157,7 +157,7 @@ class SherpaInferenceEngine implements InferenceEngine {
     });
 
     final nFrames = features.length ~/ fbank.nMels;
-    debugPrint('=== Sherpa transcribe: frames=$nFrames, nMels=${fbank.nMels} ===');
+    SttLogger.d('=== Sherpa transcribe: frames=$nFrames, nMels=${fbank.nMels} ===');
 
     // 2. Run encoder
     final featureTensor = await ort.OrtValue.fromList(
@@ -207,81 +207,93 @@ class SherpaInferenceEngine implements InferenceEngine {
       }
     }
 
-    debugPrint('  encoder: frames=$nFrames, dim=$encDim');
-    debugPrint('  decoder states: ${stateInputs.length} in, ${stateOutputNames.length} out');
+    SttLogger.d('encoder: frames=$nFrames, dim=$encDim');
+    SttLogger.d('decoder states: ${stateInputs.length} in, ${stateOutputNames.length} out');
 
     int prevToken = blank;
     while (t < nFrames && resultTokens.length < maxTokens) {
       token?.throwIfCancelled();
-      // Decoder forward
-      final decInputIds = Int64List.fromList([prevToken]);
-      final decInMap = <String, ort.OrtValue>{
-        _decInput: await ort.OrtValue.fromList(decInputIds, [1, 1]),
-      };
-      decInMap.addAll(stateInputs);
+      ort.OrtValue? decInputTensor;
+      ort.OrtValue? joinEncTensor;
+      ort.OrtValue? joinDecTensor;
+      Map<String, ort.OrtValue>? decoderOut;
+      Map<String, ort.OrtValue>? joinerOut;
+      try {
+        // Decoder forward
+        final decInputIds = Int64List.fromList([prevToken]);
+        decInputTensor = await ort.OrtValue.fromList(decInputIds, [1, 1]);
+        final decInMap = <String, ort.OrtValue>{
+          _decInput: decInputTensor,
+        };
+        decInMap.addAll(stateInputs);
 
-      final decoderOut = await _decoderSession!.run(decInMap);
-      final rawDec = await decoderOut[_decOutput]!.asFlattenedList();
+        decoderOut = await _decoderSession!.run(decInMap);
+        final rawDec = await decoderOut[_decOutput]!.asFlattenedList();
 
-      // Update states
-      for (final sName in stateOutputNames) {
-        final existing = stateInputs[sName];
-        if (existing != null) {
-          await existing.dispose();
+        // Update states
+        for (final sName in stateOutputNames) {
+          final existing = stateInputs[sName];
+          if (existing != null) {
+            await existing.dispose();
+          }
+          stateInputs[sName] = decoderOut[sName]!;
         }
-        stateInputs[sName] = decoderOut[sName]!;
-      }
 
-      // Joiner: combine encoder frame t + decoder output
-      final encFrameStart = t * encDim;
-      final encFrame = rawEnc.sublist(encFrameStart, min(encFrameStart + encDim, rawEnc.length));
-      final joinInputs = <String, ort.OrtValue>{
-        _joinInputEnc: await ort.OrtValue.fromList(
+        // Joiner: combine encoder frame t + decoder output
+        final encFrameStart = t * encDim;
+        final encFrame = rawEnc.sublist(encFrameStart, min(encFrameStart + encDim, rawEnc.length));
+        joinEncTensor = await ort.OrtValue.fromList(
           Float32List.fromList(encFrame.cast<num>().map((e) => e.toDouble()).toList()),
           [1, 1, encDim],
-        ),
-        _joinInputDec: await ort.OrtValue.fromList(
+        );
+        joinDecTensor = await ort.OrtValue.fromList(
           Float32List.fromList(rawDec.cast<num>().map((e) => e.toDouble()).toList()),
           [1, 1, rawDec.length],
-        ),
-      };
+        );
+        final joinInputs = <String, ort.OrtValue>{
+          _joinInputEnc: joinEncTensor,
+          _joinInputDec: joinDecTensor,
+        };
 
-      final joinerOut = await _joinerSession!.run(joinInputs);
-      final rawLogits = await joinerOut[_joinOutput]!.asFlattenedList();
+        joinerOut = await _joinerSession!.run(joinInputs);
+        final rawLogits = await joinerOut[_joinOutput]!.asFlattenedList();
 
-      // Cleanup
-      await decInMap[_decInput]!.dispose();
-      await joinInputs[_joinInputEnc]!.dispose();
-      await joinInputs[_joinInputDec]!.dispose();
-      for (final v in decoderOut.values) {
-        await v.dispose();
-      }
-      for (final v in joinerOut.values) {
-        await v.dispose();
-      }
-
-      // Argmax
-      int best = 0;
-      double bestVal = double.negativeInfinity;
-      for (int i = 0; i < rawLogits.length; i++) {
-        final v = (rawLogits[i] as num).toDouble();
-        if (v > bestVal) {
-          bestVal = v;
-          best = i;
+        // Argmax
+        int best = 0;
+        double bestVal = double.negativeInfinity;
+        for (int i = 0; i < rawLogits.length; i++) {
+          final v = (rawLogits[i] as num).toDouble();
+          if (v > bestVal) {
+            bestVal = v;
+            best = i;
+          }
         }
-      }
 
-      if (best == blank) {
-        // Advance to next encoder frame
-        t++;
-        if (resultTokens.isNotEmpty) {
-          prevToken = resultTokens.last;
+        if (best == blank) {
+          t++;
+          if (resultTokens.isNotEmpty) {
+            prevToken = resultTokens.last;
+          }
+        } else {
+          resultTokens.add(best);
+          prevToken = best;
+          if (resultTokens.length < 20 || resultTokens.length % 50 == 0) {
+            SttLogger.d('sherpa step t=$t: token=$best, partial="${_decode(resultTokens)}"');
+          }
         }
-      } else {
-        resultTokens.add(best);
-        prevToken = best;
-        if (resultTokens.length < 20 || resultTokens.length % 50 == 0) {
-          debugPrint('  sherpa step t=$t: token=$best, partial="${_decode(resultTokens)}"');
+      } finally {
+        await decInputTensor?.dispose();
+        await joinEncTensor?.dispose();
+        await joinDecTensor?.dispose();
+        if (decoderOut != null) {
+          for (final v in decoderOut.values) {
+            await v.dispose();
+          }
+        }
+        if (joinerOut != null) {
+          for (final v in joinerOut.values) {
+            await v.dispose();
+          }
         }
       }
     }
@@ -293,7 +305,7 @@ class SherpaInferenceEngine implements InferenceEngine {
 
     final text = _decode(resultTokens);
     stopwatch.stop();
-    debugPrint('=== sherpa result: "$text" (${resultTokens.length} tokens) in ${stopwatch.elapsedMilliseconds}ms ===');
+    SttLogger.d('=== sherpa result: "$text" (${resultTokens.length} tokens) in ${stopwatch.elapsedMilliseconds}ms ===');
 
     return SttResult(
       text: text,

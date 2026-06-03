@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import 'model_registry.dart';
 import 'model_downloader.dart';
 import 'stt_result.dart';
 import 'stt_exception.dart';
+import 'stt_logger.dart';
 import 'cancellation_token.dart';
+import 'compute_worker.dart';
 import 'audio/audio_buffer.dart';
 import 'audio/audio_processor.dart';
 import 'engines/inference_engine.dart';
@@ -28,6 +29,8 @@ class SttFlutter {
     if (_initialized) throw SttException.notInitialized('SttFlutter');
     if (model.id.isEmpty) throw SttException.invalidArgument('model.id must not be empty');
     _defaultLanguage = language;
+
+    await ComputeWorker.instance.initialize();
 
     final dir = modelDir ?? await ModelDownloader.defaultStoragePath(model);
     final modelFiles = <String, String>{};
@@ -61,6 +64,7 @@ class SttFlutter {
       _engine = createEngine(model.type, _ort!);
       await _engine!.load(modelFiles);
       _initialized = true;
+      SttLogger.i('Initialized with model: ${model.id}');
     } catch (e) {
       await _cleanup();
       rethrow;
@@ -72,7 +76,7 @@ class SttFlutter {
     final file = File(path);
     if (!await file.exists()) throw SttException.fileNotFound(path);
     final audio = await AudioProcessor.loadWav(path);
-    if (audio.length == 0) throw SttException.invalidArgument('Audio file contains no samples');
+    if (audio.samples.isEmpty) throw SttException.invalidArgument('Audio file contains no samples');
     return _transcribe(audio, language: language, token: token);
   }
 
@@ -81,7 +85,7 @@ class SttFlutter {
     if (sampleRate <= 0 || sampleRate > 192000) {
       throw SttException.invalidArgument('sampleRate must be between 1 and 192000');
     }
-    if (samples.length == 0) {
+    if (samples.isEmpty) {
       throw SttException.invalidArgument('samples buffer must not be empty');
     }
     final audio = AudioBuffer(samples: samples, sampleRate: sampleRate);
@@ -91,9 +95,11 @@ class SttFlutter {
   Future<SttResult> _transcribe(AudioBuffer audio, {String? language, CancellationToken? token}) async {
     _currentToken = token;
     token?.throwIfCancelled();
-    final resampled = await Isolate.run(() => AudioProcessor.resampleSync(audio));
+    final resampled = await ComputeWorker.instance.resample(audio);
     token?.throwIfCancelled();
-    return _engine!.transcribe(resampled, language: language ?? _defaultLanguage, token: token);
+    final result = await _engine!.transcribe(resampled, language: language ?? _defaultLanguage, token: token);
+    SttLogger.d('transcription completed in ${result.inferenceTimeMs}ms');
+    return result;
   }
 
   void cancel() {
@@ -114,5 +120,6 @@ class SttFlutter {
     _engine = null;
     _ort = null;
     _initialized = false;
+    await ComputeWorker.instance.dispose();
   }
 }

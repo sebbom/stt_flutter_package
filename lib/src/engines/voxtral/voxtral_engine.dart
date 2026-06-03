@@ -1,12 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import '../../stt_result.dart';
 import '../../cancellation_token.dart';
+import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
 import '../inference_engine.dart';
 import '../../utils/math_utils.dart';
@@ -60,10 +59,10 @@ class VoxtralInferenceEngine implements InferenceEngine {
         _maxSourcePositions = cfg['max_source_positions'] as int? ?? _maxSourcePositions;
         _maxTargetPositions = cfg['max_target_positions'] as int? ?? _maxTargetPositions;
         _numMelBins = cfg['num_mel_bins'] as int? ?? _numMelBins;
-        debugPrint('=> Voxtral config: d_model=$_dModel, vocab=$_vocabSize, '
+        SttLogger.d('=> Voxtral config: d_model=$_dModel, vocab=$_vocabSize, '
             'max_src=$_maxSourcePositions, max_tgt=$_maxTargetPositions, mels=$_numMelBins');
       } catch (e) {
-        debugPrint('=> config load FAILED: $e');
+        SttLogger.d('=> config load FAILED: $e');
       }
     }
 
@@ -88,32 +87,32 @@ class VoxtralInferenceEngine implements InferenceEngine {
 
     // Detect encoder input/output names
     final encInputs = await _audioEncoderSession!.getInputInfo();
-    debugPrint('=== Voxtral AudioEncoder inputs ===');
+    SttLogger.d('=== Voxtral AudioEncoder inputs ===');
     for (final info in encInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (encInputs.isNotEmpty) {
       _audioEncInput = (encInputs.first['name'] as String?) ?? _audioEncInput;
     }
     final encOutputs = await _audioEncoderSession!.getOutputInfo();
-    debugPrint('=== Voxtral AudioEncoder outputs ===');
+    SttLogger.d('=== Voxtral AudioEncoder outputs ===');
     for (final info in encOutputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (encOutputs.isNotEmpty) {
       _audioEncOutput = (encOutputs.first['name'] as String?) ?? _audioEncOutput;
       final shape = encOutputs.first['shape'] as List<dynamic>?;
       if (shape != null && shape.length >= 3) {
         _dModel = (shape[2] as num).toInt();
-        debugPrint('  => d_model = $_dModel');
+        SttLogger.d('  => d_model = $_dModel');
       }
     }
 
     // Detect decoder input/output names
     final decInputs = await _decoderSession!.getInputInfo();
-    debugPrint('=== Voxtral Decoder inputs ===');
+    SttLogger.d('=== Voxtral Decoder inputs ===');
     for (final info in decInputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     for (final info in decInputs) {
       final name = (info['name'] as String?) ?? '';
@@ -126,9 +125,9 @@ class VoxtralInferenceEngine implements InferenceEngine {
       }
     }
     final decOutputs = await _decoderSession!.getOutputInfo();
-    debugPrint('=== Voxtral Decoder outputs ===');
+    SttLogger.d('=== Voxtral Decoder outputs ===');
     for (final info in decOutputs) {
-      debugPrint('  $info');
+      SttLogger.d('  $info');
     }
     if (decOutputs.isNotEmpty) {
       _decOutputLogits = (decOutputs.first['name'] as String?) ?? _decOutputLogits;
@@ -164,9 +163,9 @@ class VoxtralInferenceEngine implements InferenceEngine {
             }
           }
         }
-        debugPrint('  => tokenizer loaded: ${_tokenizer!.length} entries');
+        SttLogger.d('  => tokenizer loaded: ${_tokenizer!.length} entries');
       } catch (e) {
-        debugPrint('  => tokenizer load FAILED: $e');
+        SttLogger.d('  => tokenizer load FAILED: $e');
       }
     }
   }
@@ -195,7 +194,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
       return ms.compute(audio.samples);
     });
     final totalFrames = mel.length ~/ _numMelBins;
-    debugPrint('=== Voxtral transcribe: audio=${audio.length}samples, melFrames=$totalFrames ===');
+    SttLogger.d('=== Voxtral transcribe: audio=${audio.length}samples, melFrames=$totalFrames ===');
 
     final fullText = StringBuffer();
     final fullMelFrames = totalFrames < _maxSourcePositions ? totalFrames : _maxSourcePositions;
@@ -214,7 +213,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
       await v.dispose();
     }
 
-    debugPrint('  encoder: output=${rawStates.length} floats');
+    SttLogger.d('  encoder: output=${rawStates.length} floats');
 
     final encSeqLen = rawStates.length ~/ _dModel;
     final encData = Float32List.fromList(rawStates.cast<num>().map((e) => e.toDouble()).toList());
@@ -234,6 +233,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
         _decInputStates: encTensor,
       };
       final extraTensors = <ort.OrtValue>[];
+      Map<String, ort.OrtValue>? decoderOut;
       try {
         for (final extra in _decoderExtraInputs) {
           final eName = extra['name'] as String? ?? '';
@@ -254,16 +254,8 @@ class VoxtralInferenceEngine implements InferenceEngine {
           decoderInputs[eName] = tensor;
         }
 
-        final decoderOut = await _decoderSession!.run(decoderInputs);
+        decoderOut = await _decoderSession!.run(decoderInputs);
         final rawLogits = await decoderOut[_decOutputLogits]!.asFlattenedList();
-
-        await idTensor.dispose();
-        for (final v in decoderOut.values) {
-          await v.dispose();
-        }
-        for (final t in extraTensors) {
-          await t.dispose();
-        }
 
         final vocabSize = rawLogits.length ~/ tokens.length;
         final lastStart = (tokens.length - 1) * vocabSize;
@@ -278,9 +270,15 @@ class VoxtralInferenceEngine implements InferenceEngine {
 
         if (i < 20 || i % 50 == 0) {
           final partial = _decode(tokens.sublist(1));
-          debugPrint('  decoder step $i: token=$best, partial="$partial"');
+          SttLogger.d('decoder step $i: token=$best, partial="$partial"');
         }
       } finally {
+        await idTensor.dispose();
+        if (decoderOut != null) {
+          for (final v in decoderOut.values) {
+            await v.dispose();
+          }
+        }
         for (final t in extraTensors) {
           await t.dispose();
         }
@@ -292,7 +290,7 @@ class VoxtralInferenceEngine implements InferenceEngine {
     final text = _decode(tokens.sublist(1));
     if (text.isNotEmpty) fullText.write(text);
     stopwatch.stop();
-    debugPrint('=== voxtral result: "$text" (${tokens.length - 1} tokens) in ${stopwatch.elapsedMilliseconds}ms ===');
+    SttLogger.d('=== voxtral result: "$text" (${tokens.length - 1} tokens) in ${stopwatch.elapsedMilliseconds}ms ===');
 
     return SttResult(
       text: fullText.toString(),
