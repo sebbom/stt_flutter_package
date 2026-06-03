@@ -2,10 +2,17 @@ import 'package:stt_flutter/src/model_registry.dart';
 import 'package:stt_flutter/src/stt_config.dart';
 
 void registerWhisperModels() {
-  const base = 'https://huggingface.co/onnx-community';
+  const base = 'https://huggingface.co/csukuangfj';
 
-  // Large-v3 uses Xet external data files for FP32, but q4f16 is self-contained
-  void addVariants(String id, String name, String repo, List<String> langs, int mb) {
+  void addVariants(
+    String id,
+    String name,
+    String repo,
+    String prefix,
+    List<String> langs,
+    int mb, {
+    List<ModelFile> extraFiles = const [],
+  }) {
     ModelRegistry.register(ModelDescriptor(
       id: id,
       name: name,
@@ -13,95 +20,122 @@ void registerWhisperModels() {
       languages: langs,
       files: [
         ModelFile(
-          url: '$base/$repo/resolve/main/onnx/encoder_model_q4f16.onnx',
-          filename: 'encoder.onnx',
+          url: '$base/$repo/resolve/main/$prefix-encoder.onnx',
+          filename: '$prefix-encoder.onnx',
         ),
         ModelFile(
-          url: '$base/$repo/resolve/main/onnx/decoder_model_merged_q4f16.onnx',
-          filename: 'decoder.onnx',
+          url: '$base/$repo/resolve/main/$prefix-decoder.onnx',
+          filename: '$prefix-decoder.onnx',
         ),
         ModelFile(
-          url: '$base/$repo/resolve/main/vocab.json',
-          filename: 'vocab.json',
+          url: '$base/$repo/resolve/main/$prefix-tokens.txt',
+          filename: '$prefix-tokens.txt',
         ),
+        ...extraFiles,
       ],
-      sizeMb: mb + 1,
+      sizeMb: mb,
     ));
   }
 
   addVariants(
     'whisper-tiny',
-    'Whisper Tiny q4f16 (39M params)',
-    'whisper-tiny-ONNX',
+    'Whisper Tiny (39M params, multilingual)',
+    'sherpa-onnx-whisper-tiny',
+    'tiny',
     ['en', 'de', 'fr', 'es', 'pt', 'ja', 'zh', 'ar', 'ru', 'it', 'nl', 'pl', 'tr'],
-    55,
+    150,
   );
   addVariants(
     'whisper-tiny-en',
-    'Whisper Tiny English-only q4f16 (39M params)',
-    'whisper-tiny.en-ONNX',
+    'Whisper Tiny (39M params, English only)',
+    'sherpa-onnx-whisper-tiny.en',
+    'tiny.en',
     ['en'],
-    55,
+    150,
   );
 
   addVariants(
     'whisper-base',
-    'Whisper Base q4f16 (74M params)',
-    'whisper-base-ONNX',
+    'Whisper Base (74M params, multilingual)',
+    'sherpa-onnx-whisper-base',
+    'base',
     ['en', 'de', 'fr', 'es', 'pt', 'ja', 'zh', 'ar', 'ru', 'it', 'nl', 'pl', 'tr'],
-    85,
+    240,
   );
   addVariants(
     'whisper-base-en',
-    'Whisper Base English-only q4f16 (74M params)',
-    'whisper-base.en-ONNX',
+    'Whisper Base (74M params, English only)',
+    'sherpa-onnx-whisper-base.en',
+    'base.en',
     ['en'],
-    85,
+    240,
   );
 
   addVariants(
     'whisper-small',
-    'Whisper Small q4f16 (244M params)',
-    'whisper-small-ONNX',
+    'Whisper Small (244M params, multilingual)',
+    'sherpa-onnx-whisper-small',
+    'small',
     ['en', 'de', 'fr', 'es', 'pt', 'ja', 'zh', 'ar', 'ru', 'it', 'nl', 'pl', 'tr'],
-    200,
+    460,
   );
   addVariants(
     'whisper-small-en',
-    'Whisper Small English-only q4f16 (244M params)',
-    'whisper-small.en-ONNX',
+    'Whisper Small (244M params, English only)',
+    'sherpa-onnx-whisper-small.en',
+    'small.en',
     ['en'],
-    200,
+    460,
   );
 
   addVariants(
     'whisper-medium',
-    'Whisper Medium q4f16 (769M params)',
-    'whisper-medium-ONNX',
+    'Whisper Medium (769M params, multilingual)',
+    'sherpa-onnx-whisper-medium',
+    'medium',
     ['en', 'de', 'fr', 'es', 'pt', 'ja', 'zh', 'ar', 'ru', 'it', 'nl', 'pl', 'tr'],
-    520,
+    960,
   );
   addVariants(
     'whisper-medium-en',
-    'Whisper Medium English-only q4f16 (769M params)',
-    'whisper-medium.en-ONNX',
+    'Whisper Medium (769M params, English only)',
+    'sherpa-onnx-whisper-medium.en',
+    'medium.en',
     ['en'],
-    520,
+    960,
   );
 
   addVariants(
     'whisper-large-v3',
-    'Whisper Large v3 q4f16 (1.55B params)',
-    'whisper-large-v3-ONNX',
+    'Whisper Large v3 (1.55B params, multilingual)',
+    'sherpa-onnx-whisper-large-v3',
+    'large-v3',
     ['en', 'de', 'fr', 'es', 'pt', 'ja', 'zh', 'ar', 'ru', 'it', 'nl', 'pl', 'tr'],
-    1000,
+    950,
+    extraFiles: [
+      ModelFile(
+        url: '$base/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-encoder.weights',
+        filename: 'large-v3-encoder.weights',
+      ),
+      ModelFile(
+        url: '$base/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-decoder.weights',
+        filename: 'large-v3-decoder.weights',
+      ),
+    ],
   );
 
   addVariants(
     'whisper-large-v3-turbo',
-    'Whisper Large v3 Turbo q4f16 (809M params)',
-    'whisper-large-v3-turbo-ONNX',
+    'Whisper Turbo (809M params, multilingual)',
+    'sherpa-onnx-whisper-turbo',
+    'turbo',
     ['en', 'de', 'fr', 'es', 'pt', 'ja', 'zh', 'ar', 'ru', 'it', 'nl', 'pl', 'tr'],
-    570,
+    550,
+    extraFiles: [
+      ModelFile(
+        url: '$base/sherpa-onnx-whisper-turbo/resolve/main/turbo-encoder.weights',
+        filename: 'turbo-encoder.weights',
+      ),
+    ],
   );
 }

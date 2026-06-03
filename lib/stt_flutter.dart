@@ -13,20 +13,11 @@ export 'src/engines/whisper/whisper_engine.dart'
     show WhisperInferenceEngine;
 export 'src/engines/sherpa/sherpa_engine.dart'
     show SherpaInferenceEngine;
-export 'src/engines/voxtral/voxtral_engine.dart'
-    show VoxtralInferenceEngine;
+export 'src/engines/nemo/nemo_engine.dart'
+    show NemoInferenceEngine;
 export 'src/audio/mel_spectrogram.dart'
     show MelSpectrogram;
-export 'src/config/models.dart';
 export 'src/device_utils.dart';
-export 'src/language_detector.dart';
-export 'src/models/model_manager.dart';
-export 'src/models/model_downloader.dart' show SherpaModelDownloader;
-export 'src/models/model_loader.dart';
-export 'src/stt/model_switcher.dart';
-export 'src/stt/transcription_service.dart';
 export 'src/stt/stt_engine.dart';
-export 'src/stt/error_handler.dart';
 export 'src/audio/audio_capture.dart';
 export 'src/audio/vad.dart';
-export 'src/testing/benchmark_service.dart';

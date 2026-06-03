@@ -4,7 +4,7 @@ import 'package:stt_flutter/stt_flutter.dart';
 void main() {
   group('ModelRegistry', () {
     test('available returns all models', () {
-      expect(ModelRegistry.available().length, greaterThanOrEqualTo(12));
+      expect(ModelRegistry.available().length, greaterThanOrEqualTo(11));
     });
 
     test('available filters by type', () {
@@ -14,8 +14,7 @@ void main() {
       final sherpa = ModelRegistry.available(type: SttModelType.sherpa);
       expect(sherpa.every((m) => m.type == SttModelType.sherpa), true);
 
-      final voxtral = ModelRegistry.available(type: SttModelType.voxtral);
-      expect(voxtral.every((m) => m.type == SttModelType.voxtral), true);
+
     });
 
     test('get returns correct model by id', () {

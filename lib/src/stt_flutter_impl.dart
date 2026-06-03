@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter_onnxruntime/flutter_onnxruntime.dart' as ort;
 import 'model_registry.dart';
 import 'model_downloader.dart';
 import 'stt_result.dart';
@@ -15,7 +14,6 @@ import 'engines/inference_engine.dart';
 import 'engines/engine_factory.dart';
 
 class SttFlutter {
-  ort.OnnxRuntime? _ort;
   InferenceEngine? _engine;
   bool _initialized = false;
   String? _defaultLanguage;
@@ -48,7 +46,7 @@ class SttFlutter {
       await for (final entry in modelDir_.list()) {
         if (entry is File) {
           final name = entry.uri.pathSegments.last;
-          if (name.endsWith('.onnx') || name.endsWith('.onnx_data') || name.endsWith('.txt') || name.endsWith('.json')) {
+          if (name.endsWith('.onnx') || name.endsWith('.onnx_data') || name.endsWith('.txt') || name.endsWith('.json') || name.endsWith('.weights')) {
             modelFiles[name] = entry.path;
           }
         }
@@ -60,8 +58,7 @@ class SttFlutter {
     }
 
     try {
-      _ort = ort.OnnxRuntime();
-      _engine = createEngine(model.type, _ort!);
+      _engine = createEngine(model.type);
       await _engine!.load(modelFiles);
       _initialized = true;
       SttLogger.i('Initialized with model: ${model.id}');
@@ -95,7 +92,12 @@ class SttFlutter {
   Future<SttResult> _transcribe(AudioBuffer audio, {String? language, CancellationToken? token}) async {
     _currentToken = token;
     token?.throwIfCancelled();
-    final resampled = await ComputeWorker.instance.resample(audio);
+    final AudioBuffer resampled;
+    if (audio.sampleRate == 16000) {
+      resampled = audio;
+    } else {
+      resampled = await ComputeWorker.instance.resample(audio);
+    }
     token?.throwIfCancelled();
     final result = await _engine!.transcribe(resampled, language: language ?? _defaultLanguage, token: token);
     SttLogger.d('transcription completed in ${result.inferenceTimeMs}ms');
@@ -109,7 +111,6 @@ class SttFlutter {
   Future<void> _cleanup() async {
     await _engine?.dispose();
     _engine = null;
-    _ort = null;
     _initialized = false;
   }
 
@@ -118,7 +119,6 @@ class SttFlutter {
     if (!_initialized) return;
     await _engine?.dispose();
     _engine = null;
-    _ort = null;
     _initialized = false;
     await ComputeWorker.instance.dispose();
   }

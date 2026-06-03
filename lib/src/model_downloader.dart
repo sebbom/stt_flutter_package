@@ -23,7 +23,7 @@ class ModelDownloader {
     for (final file in model.files) {
       final destPath = '$dir/${file.filename}';
       if (file.filename.endsWith('.tar.bz2') || !await File(destPath).exists()) {
-        await _downloadFile(
+        await downloadFile(
           url: file.url,
           destPath: destPath,
           sha256: file.sha256,
@@ -54,7 +54,7 @@ class ModelDownloader {
     return true;
   }
 
-  static Future<void> _downloadFile({
+  static Future<void> downloadFile({
     required String url,
     required String destPath,
     String? sha256,
