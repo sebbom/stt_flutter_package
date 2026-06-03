@@ -11,7 +11,7 @@ class SttExampleApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'STT Flutter Example',
+      title: 'STT Flutter',
       theme: ThemeData(
         colorSchemeSeed: Colors.blue,
         useMaterial3: true,
