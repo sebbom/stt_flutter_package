@@ -5,8 +5,14 @@ class ModelFile {
   final String url;
   final String filename;
   final String? sha256;
+  final int? sizeBytes;
 
-  const ModelFile({required this.url, required this.filename, this.sha256});
+  const ModelFile({
+    required this.url,
+    required this.filename,
+    this.sha256,
+    this.sizeBytes,
+  });
 }
 
 class ModelDescriptor {

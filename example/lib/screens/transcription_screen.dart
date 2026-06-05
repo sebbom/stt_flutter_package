@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:stt_flutter/stt_flutter.dart';
+import '../utils/audio_diagnostics.dart';
 
 enum LangMode { auto, modelDefault, force }
 
@@ -34,6 +36,10 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
   String _forceLang = '';
   bool _useLanguageDetector = false;
   String? _detectorStatus;
+
+  NormalizeMode _normalize = NormalizeMode.none;
+  bool _highPass = false;
+  double _preprocessGain = 1.0;
 
   final List<int> _speechBuffer = [];
   StreamSubscription<Float32List>? _captureSub;
@@ -239,42 +245,70 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
     _speechBuffer.clear();
     _stopping = false;
 
-    await _capture!.startRecording();
+    try {
+      await _capture!.startRecording();
+    } catch (e) {
+      String msg = 'Failed to start recording: $e';
+      if (Platform.isLinux) {
+        final diag = await LinuxAudioDiagnostics.diagnose(rawError: e);
+        msg = diag.preciseMessage;
+      }
+      if (mounted) {
+        setState(() {
+          _transcribing = false;
+          _error = msg;
+        });
+      }
+      return;
+    }
     _captureSub = _capture!.audioStream.listen(_onAudioChunk);
     if (mounted) setState(() => _transcribing = true);
   }
 
   Future<bool> _ensureMicPermission() async {
-    final status = await Permission.microphone.status;
-    if (status.isGranted) return true;
-    if (status.isPermanentlyDenied) {
-      if (mounted) {
-        await showDialog<void>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Microphone permission required'),
-            content: const Text(
-                'STT recording needs microphone access. Please enable it in app settings.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openAppSettings();
-                },
-                child: const Text('Open settings'),
-              ),
-            ],
-          ),
-        );
-      }
-      return false;
+    if (!_permissionHandlerSupported) {
+      return _capture!.hasPermission();
     }
-    final result = await Permission.microphone.request();
-    return result.isGranted;
+    try {
+      final status = await Permission.microphone.status;
+      if (status.isGranted) return true;
+      if (status.isPermanentlyDenied) {
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Microphone permission required'),
+              content: const Text(
+                  'STT recording needs microphone access. Please enable it in app settings.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    openAppSettings();
+                  },
+                  child: const Text('Open settings'),
+                ),
+              ],
+            ),
+          );
+        }
+        return false;
+      }
+      final result = await Permission.microphone.request();
+      return result.isGranted;
+    } catch (_) {
+      return _capture!.hasPermission();
+    }
+  }
+
+  static bool get _permissionHandlerSupported {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
   }
 
   void _onAudioChunk(Float32List chunk) {
@@ -384,11 +418,18 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
     return i < 0 ? '' : name.substring(i + 1).toLowerCase();
   }
 
+  PreprocessConfig get _preprocess => PreprocessConfig(
+        gain: _preprocessGain,
+        normalize: _normalize,
+        highPass: _highPass,
+      );
+
   Future<void> _transcribeFile(String path,
       {required String source}) async {
     final result = await SttEngine.instance.transcribeFile(
       path,
       language: _effectiveLanguage(),
+      preprocess: _preprocess,
     );
     if (mounted) {
       setState(() {
@@ -421,6 +462,7 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
     final result = await SttEngine.instance.transcribeFile(
       path,
       language: _effectiveLanguage(),
+      preprocess: _preprocess,
     );
     if (mounted) {
       setState(() {
@@ -584,6 +626,8 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
         _modelInfoCard(theme),
         const SizedBox(height: 12),
         _languageModeCard(theme),
+        const SizedBox(height: 12),
+        _preprocessCard(theme),
         const SizedBox(height: 12),
         _actionsCard(theme),
         const SizedBox(height: 12),
@@ -755,6 +799,99 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _preprocessCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.graphic_eq, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text('Preprocessing (files only)',
+                    style: theme.textTheme.titleSmall),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Applies to Pick file / Sample. Use for low-volume recordings '
+              '— STT engines decode blanks when peaks are very small.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<NormalizeMode>(
+              segments: const [
+                ButtonSegment(
+                    value: NormalizeMode.none,
+                    label: Text('Off'),
+                    icon: Icon(Icons.block)),
+                ButtonSegment(
+                    value: NormalizeMode.peak,
+                    label: Text('Peak'),
+                    icon: Icon(Icons.trending_up)),
+                ButtonSegment(
+                    value: NormalizeMode.rms,
+                    label: Text('RMS'),
+                    icon: Icon(Icons.equalizer)),
+              ],
+              selected: {_normalize},
+              onSelectionChanged: (s) =>
+                  setState(() => _normalize = s.first),
+            ),
+            SwitchListTile.adaptive(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('High-pass filter (80 Hz)'),
+              subtitle: Text(
+                'Removes DC offset and low-frequency rumble.',
+                style: theme.textTheme.bodySmall,
+              ),
+              value: _highPass,
+              onChanged: (v) => setState(() => _highPass = v),
+            ),
+            Row(
+              children: [
+                const Text('Gain'),
+                Expanded(
+                  child: Slider(
+                    value: _preprocessGain,
+                    min: 0.5,
+                    max: 5.0,
+                    divisions: 18,
+                    label: '${_preprocessGain.toStringAsFixed(2)}×',
+                    onChanged: (v) => setState(() => _preprocessGain = v),
+                  ),
+                ),
+                SizedBox(
+                  width: 56,
+                  child: Text(
+                    '${_preprocessGain.toStringAsFixed(2)}×',
+                    textAlign: TextAlign.end,
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+            if (_preprocessGain > 1.0 && _normalize == NormalizeMode.none)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '⚠ Gain > 1× without normalization can clip and hurt accuracy.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 

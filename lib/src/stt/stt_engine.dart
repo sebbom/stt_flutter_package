@@ -6,6 +6,7 @@ import '../stt_exception.dart';
 import '../model_registry.dart';
 import '../model_downloader.dart';
 import '../stt_logger.dart';
+import '../audio/audio_processor.dart';
 
 class SttEngine {
   static bool _initialized = false;
@@ -74,24 +75,28 @@ class SttEngine {
   Future<SttResult> transcribeFile(
     String path, {
     String? language,
+    PreprocessConfig preprocess = PreprocessConfig.none,
   }) async {
     final stt = _stt;
     if (stt == null) {
       throw SttException.notInitialized('SttEngine');
     }
-    return stt.transcribeFile(path, language: language);
+    return stt.transcribeFile(path,
+        language: language, preprocess: preprocess);
   }
 
   Future<SttResult> transcribeBuffer(
     Float32List samples,
     int sampleRate, {
     String? language,
+    PreprocessConfig preprocess = PreprocessConfig.none,
   }) async {
     final stt = _stt;
     if (stt == null) {
       throw SttException.notInitialized('SttEngine');
     }
-    return stt.transcribeBuffer(samples, sampleRate, language: language);
+    return stt.transcribeBuffer(samples, sampleRate,
+        language: language, preprocess: preprocess);
   }
 
   /// Set the language-detector fallback (uses a Whisper-tiny SLI model).

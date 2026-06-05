@@ -40,6 +40,16 @@ class SttFlutter {
             (language != null && language.isNotEmpty) ? language : null,
         _initialized = true;
 
+  /// Test-only: inject a [LanguageDetector] (e.g. a fake) used to auto-detect
+  /// the language in [_transcribe] when no per-call or default language is
+  /// provided and the engine requires explicit language.
+  @visibleForTesting
+  set detector(LanguageDetector? value) {
+    _detector = value;
+    _detectorEncoderPath = 'fake-encoder.onnx';
+    _detectorDecoderPath = 'fake-decoder.onnx';
+  }
+
   Future<void> initialize({
     required ModelDescriptor model,
     String? modelDir,
@@ -100,11 +110,12 @@ class SttFlutter {
     String path, {
     String? language,
     CancellationToken? token,
+    PreprocessConfig preprocess = PreprocessConfig.none,
   }) async {
     if (!_initialized) throw SttException.notInitialized('SttFlutter');
     final file = File(path);
     if (!await file.exists()) throw SttException.fileNotFound(path);
-    final audio = await AudioProcessor.loadWav(path);
+    final audio = await AudioProcessor.loadWav(path, preprocess: preprocess);
     if (audio.samples.isEmpty) {
       throw SttException.invalidArgument('Audio file contains no samples');
     }
@@ -116,6 +127,7 @@ class SttFlutter {
     int sampleRate, {
     String? language,
     CancellationToken? token,
+    PreprocessConfig preprocess = PreprocessConfig.none,
   }) async {
     if (!_initialized) throw SttException.notInitialized('SttFlutter');
     if (sampleRate <= 0 || sampleRate > 192000) {
@@ -124,7 +136,10 @@ class SttFlutter {
     if (samples.isEmpty) {
       throw SttException.invalidArgument('samples buffer must not be empty');
     }
-    final audio = AudioBuffer(samples: samples, sampleRate: sampleRate);
+    var audio = AudioBuffer(samples: samples, sampleRate: sampleRate);
+    if (!preprocess.isNoOp) {
+      audio = AudioProcessor.applyPreprocess(audio, preprocess);
+    }
     return _transcribe(audio, language: language, token: token);
   }
 
@@ -136,12 +151,6 @@ class SttFlutter {
     _currentToken = token;
     token?.throwIfCancelled();
 
-    final effective = language ?? _defaultLanguage;
-
-    if (effective != null && effective.isNotEmpty) {
-      _warnIfUnsupported(effective);
-    }
-
     final AudioBuffer resampled;
     if (audio.sampleRate == 16000) {
       resampled = audio;
@@ -150,6 +159,34 @@ class SttFlutter {
     }
     token?.throwIfCancelled();
 
+    String? effective = language ?? _defaultLanguage;
+    String? detectedLang;
+
+    final needAutoDetect = (effective == null || effective.isEmpty) &&
+        _engine!.supportsExplicitLanguage;
+
+    if (needAutoDetect && _detector != null) {
+      try {
+        final detected = await _detector!.detect(
+          resampled.samples,
+          sampleRate: 16000,
+          encoderPath: _detectorEncoderPath!,
+          decoderPath: _detectorDecoderPath!,
+        );
+        if (detected.isNotEmpty) {
+          detectedLang = detected;
+          effective = detected;
+          SttLogger.i('Auto-detected language: $effective');
+        }
+      } catch (e) {
+        SttLogger.d('LanguageDetector auto-detect failed: $e');
+      }
+    }
+
+    if (effective != null && effective.isNotEmpty) {
+      _warnIfUnsupported(effective);
+    }
+
     final result = await _engine!.transcribe(
       resampled,
       language: effective,
@@ -157,7 +194,9 @@ class SttFlutter {
     );
 
     String? lang = result.lang;
-    if ((lang == null || lang.isEmpty) && _detector != null) {
+    if ((lang == null || lang.isEmpty) && detectedLang != null) {
+      lang = detectedLang;
+    } else if ((lang == null || lang.isEmpty) && _detector != null) {
       try {
         lang = await _detector!.detect(
           resampled.samples,

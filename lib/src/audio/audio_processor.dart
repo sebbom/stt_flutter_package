@@ -1,15 +1,133 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'audio_buffer.dart';
+
+enum NormalizeMode { none, peak, rms }
+
+class PreprocessConfig {
+  final double gain;
+  final NormalizeMode normalize;
+  final bool highPass;
+  final double highPassCutoffHz;
+  final double peakTarget;
+  final double rmsTarget;
+
+  const PreprocessConfig({
+    this.gain = 1.0,
+    this.normalize = NormalizeMode.none,
+    this.highPass = false,
+    this.highPassCutoffHz = 80.0,
+    this.peakTarget = 0.95,
+    this.rmsTarget = 0.1,
+  });
+
+  static const none = PreprocessConfig();
+
+  bool get isNoOp =>
+      gain == 1.0 && normalize == NormalizeMode.none && !highPass;
+}
 
 class AudioProcessor {
   static const int targetSampleRate = 16000;
 
-  /// Load a WAV file and return a 16kHz mono Float32 AudioBuffer.
-  static Future<AudioBuffer> loadWav(String path) async {
+  /// Load a WAV file, optionally apply preprocessing, and return a
+  /// 16kHz mono Float32 AudioBuffer.
+  static Future<AudioBuffer> loadWav(
+    String path, {
+    PreprocessConfig preprocess = PreprocessConfig.none,
+  }) async {
     final file = File(path);
     final bytes = await file.readAsBytes();
-    return _parseWavBytes(bytes);
+    final buf = _parseWavBytes(bytes);
+    return preprocess.isNoOp ? buf : applyPreprocess(buf, preprocess);
+  }
+
+  /// Apply a preprocessing pipeline in this order: high-pass → gain → normalize.
+  /// Returns a new buffer; the input is not modified.
+  static AudioBuffer applyPreprocess(AudioBuffer buf, PreprocessConfig cfg) {
+    if (cfg.isNoOp) return buf;
+    var b = buf;
+    if (cfg.highPass) {
+      b = highPass(b, cutoffHz: cfg.highPassCutoffHz);
+    }
+    if (cfg.gain != 1.0) {
+      b = applyGain(b, cfg.gain);
+    }
+    switch (cfg.normalize) {
+      case NormalizeMode.peak:
+        b = peakNormalize(b, target: cfg.peakTarget);
+      case NormalizeMode.rms:
+        b = rmsNormalize(b, target: cfg.rmsTarget);
+      case NormalizeMode.none:
+        break;
+    }
+    return b;
+  }
+
+  /// Multiply every sample by [gain] and clamp to `[-1, 1]` to avoid wrap-around.
+  static AudioBuffer applyGain(AudioBuffer buf, double gain) {
+    if (gain == 1.0) return buf;
+    final out = Float32List(buf.samples.length);
+    for (var i = 0; i < buf.samples.length; i++) {
+      final v = buf.samples[i] * gain;
+      out[i] = v > 1.0 ? 1.0 : (v < -1.0 ? -1.0 : v);
+    }
+    return AudioBuffer(samples: out, sampleRate: buf.sampleRate);
+  }
+
+  /// Scale so `max|sample|` equals [target]. No-op if the buffer is silent
+  /// (peak < 1e-9) or already at/above the target.
+  static AudioBuffer peakNormalize(
+    AudioBuffer buf, {
+    double target = 0.95,
+  }) {
+    var peak = 0.0;
+    for (final s in buf.samples) {
+      final a = s.abs();
+      if (a > peak) peak = a;
+    }
+    if (peak < 1e-9 || peak >= target) return buf;
+    return applyGain(buf, target / peak);
+  }
+
+  /// Scale so RMS equals [target]. No-op if the buffer is silent.
+  /// Output is clamped to `[-1, 1]`.
+  static AudioBuffer rmsNormalize(
+    AudioBuffer buf, {
+    double target = 0.1,
+  }) {
+    if (buf.samples.isEmpty) return buf;
+    double sumSq = 0.0;
+    for (final s in buf.samples) {
+      sumSq += s * s;
+    }
+    final rms = math.sqrt(sumSq / buf.samples.length);
+    if (rms < 1e-9) return buf;
+    return applyGain(buf, target / rms);
+  }
+
+  /// First-order IIR high-pass filter (RC → bilinear). Removes DC offset
+  /// and attenuates frequencies below [cutoffHz] (default 80 Hz).
+  static AudioBuffer highPass(
+    AudioBuffer buf, {
+    double cutoffHz = 80.0,
+  }) {
+    if (buf.samples.isEmpty) return buf;
+    final dt = 1.0 / buf.sampleRate;
+    final rc = 1.0 / (2.0 * math.pi * cutoffHz);
+    final a = rc / (rc + dt);
+    final out = Float32List(buf.samples.length);
+    double yPrev = 0.0;
+    double xPrev = 0.0;
+    for (var i = 0; i < buf.samples.length; i++) {
+      final x = buf.samples[i];
+      final y = a * (yPrev + x - xPrev);
+      out[i] = y;
+      yPrev = y;
+      xPrev = x;
+    }
+    return AudioBuffer(samples: out, sampleRate: buf.sampleRate);
   }
 
   /// Resample to 16kHz mono. Lightweight enough to run on the main isolate,

@@ -141,5 +141,72 @@ void main() {
       expect(engine.lastLanguage, '');
       await stt.dispose();
     });
+
+    test(
+      'auto mode + engine requires explicit lang → LanguageDetector drives input',
+      () async {
+        final model = ModelRegistry.get('whisper-tiny');
+        final engine = _FakeEngine(model);
+        final stt = SttFlutter.withEngine(model: model, engine: engine);
+        stt.detector = _FakeDetector('es');
+
+        final result = await stt.transcribeBuffer(
+          _buffer().samples,
+          16000,
+        );
+
+        // The detector's result is forwarded to the engine.
+        expect(engine.lastLanguage, 'es');
+        // And surfaced on the result.
+        expect(result.lang, 'es');
+        await stt.dispose();
+      },
+    );
+
+    test(
+      'auto mode + engine requires explicit lang + no detector → null forwarded',
+      () async {
+        final model = ModelRegistry.get('whisper-tiny');
+        final engine = _FakeEngine(model);
+        final stt = SttFlutter.withEngine(model: model, engine: engine);
+
+        await stt.transcribeBuffer(_buffer().samples, 16000);
+
+        expect(engine.lastLanguage, isNull);
+        await stt.dispose();
+      },
+    );
+
+    test(
+      'per-call language wins over LanguageDetector in auto-capable engines',
+      () async {
+        final model = ModelRegistry.get('whisper-tiny');
+        final engine = _FakeEngine(model);
+        final stt = SttFlutter.withEngine(model: model, engine: engine);
+        stt.detector = _FakeDetector('es');
+
+        await stt.transcribeBuffer(_buffer().samples, 16000, language: 'de');
+
+        expect(engine.lastLanguage, 'de');
+        await stt.dispose();
+      },
+    );
   });
+}
+
+class _FakeDetector extends LanguageDetector {
+  final String lang;
+  int callCount = 0;
+  _FakeDetector(this.lang);
+
+  @override
+  Future<String> detect(
+    Float32List samples, {
+    required int sampleRate,
+    required String encoderPath,
+    required String decoderPath,
+  }) async {
+    callCount++;
+    return lang;
+  }
 }

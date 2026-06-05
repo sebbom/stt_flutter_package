@@ -7,6 +7,7 @@ import '../offline_engine_base.dart';
 
 class CanaryInferenceEngine extends OfflineEngineBase {
   String? _lastConfiguredLang;
+  Map<String, String>? _modelFiles;
 
   CanaryInferenceEngine(super.model);
 
@@ -15,20 +16,29 @@ class CanaryInferenceEngine extends OfflineEngineBase {
 
   @override
   Future<void> load(Map<String, String> modelFiles) async {
-    final encoder = findFile(modelFiles, ['encoder.onnx', 'encoder']);
-    final decoder = findFile(modelFiles, ['decoder.onnx', 'decoder']);
-    final tokens = findFile(modelFiles, ['tokens.txt', 'tokens']);
-
+    _modelFiles = Map.unmodifiable(modelFiles);
     final defaultLang = model.languages.isNotEmpty ? model.languages.first : '';
     _lastConfiguredLang = defaultLang;
+    _recreate(defaultLang);
+    SttLogger.d(
+      'CanaryInferenceEngine: loaded canary model (${model.id}); '
+      'default lang=$defaultLang',
+    );
+  }
 
+  void _recreate(String lang) {
+    final files = _modelFiles;
+    if (files == null) return;
+    final encoder = findFile(files, ['encoder.onnx', 'encoder']);
+    final decoder = findFile(files, ['decoder.onnx', 'decoder']);
+    final tokens = findFile(files, ['tokens.txt', 'tokens']);
     final config = OfflineRecognizerConfig(
       model: OfflineModelConfig(
         canary: OfflineCanaryModelConfig(
           encoder: encoder,
           decoder: decoder,
-          srcLang: defaultLang,
-          tgtLang: defaultLang,
+          srcLang: lang,
+          tgtLang: lang,
           usePnc: true,
         ),
         tokens: tokens,
@@ -39,12 +49,8 @@ class CanaryInferenceEngine extends OfflineEngineBase {
       ),
       decodingMethod: 'greedy_search',
     );
-
     setRecognizer(OfflineRecognizer(config));
-    SttLogger.d(
-      'CanaryInferenceEngine: loaded canary model (${model.id}); '
-      'default lang=$defaultLang',
-    );
+    _lastConfiguredLang = lang;
   }
 
   @override
@@ -54,33 +60,35 @@ class CanaryInferenceEngine extends OfflineEngineBase {
     CancellationToken? token,
   }) async {
     final stopwatch = Stopwatch()..start();
-    final rec = recognizer;
     token?.throwIfCancelled();
 
-    final effective = (language != null && language.isNotEmpty)
-        ? language
-        : (_lastConfiguredLang ?? '');
+    final hasExplicit = language != null && language.isNotEmpty;
+    final target = hasExplicit ? language : (_lastConfiguredLang ?? '');
 
     warnIfLanguageUnsupported(
-      effective.isEmpty ? null : effective,
+      hasExplicit ? target : null,
       supportsExplicitLanguage: supportsExplicitLanguage,
     );
 
+    if (hasExplicit && target != _lastConfiguredLang) {
+      _recreate(target);
+    }
+
+    final rec = recognizer;
     final stream = rec.createStream();
     try {
-      if (effective.isNotEmpty && effective != _lastConfiguredLang) {
-        stream.setOption(key: 'srcLang', value: effective);
-        stream.setOption(key: 'tgtLang', value: effective);
-      }
       stream.acceptWaveform(samples: audio.samples, sampleRate: audio.sampleRate);
       rec.decode(stream);
       final result = rec.getResult(stream);
       stopwatch.stop();
-      SttLogger.d('Canary result: "${result.text}" in ${stopwatch.elapsedMilliseconds}ms');
+      SttLogger.d(
+        'Canary result (lang=$target): "${result.text}" '
+        'in ${stopwatch.elapsedMilliseconds}ms',
+      );
       return SttResult(
         text: result.text,
         inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
-        lang: result.lang.isNotEmpty ? result.lang : effective,
+        lang: result.lang.isNotEmpty ? result.lang : target,
       );
     } finally {
       stream.free();
@@ -88,5 +96,8 @@ class CanaryInferenceEngine extends OfflineEngineBase {
   }
 
   @override
-  Future<void> dispose() async => freeRecognizer();
+  Future<void> dispose() async {
+    _modelFiles = null;
+    freeRecognizer();
+  }
 }

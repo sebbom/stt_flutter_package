@@ -25,13 +25,13 @@ class ModelDownloader {
     try {
       for (final file in model.files) {
         final destPath = '$dir/${file.filename}';
-        if (file.filename.endsWith('.tar.bz2') ||
-            !await File(destPath).exists()) {
+        if (await _needsDownload(file, destPath)) {
           await downloadFile(
             client: effectiveClient,
             url: file.url,
             destPath: destPath,
             sha256: file.sha256,
+            expectedSizeBytes: file.sizeBytes,
             onProgress: (received, total) {
               onFileProgress?.call(file.filename, received, total);
             },
@@ -55,16 +55,27 @@ class ModelDownloader {
   }) async {
     final dir = storagePath ?? await defaultStoragePath(model);
     for (final file in model.files) {
-      final f = File('$dir/${file.filename}');
-      if (!await f.exists()) return false;
+      if (await _needsDownload(file, '$dir/${file.filename}')) return false;
     }
     return true;
+  }
+
+  static Future<bool> _needsDownload(ModelFile file, String destPath) async {
+    if (file.filename.endsWith('.tar.bz2')) return true;
+    final f = File(destPath);
+    if (!await f.exists()) return true;
+    if (file.sizeBytes != null && (await f.length()) != file.sizeBytes) {
+      await f.delete();
+      return true;
+    }
+    return false;
   }
 
   static Future<void> downloadFile({
     required String url,
     required String destPath,
     String? sha256,
+    int? expectedSizeBytes,
     http.Client? client,
     void Function(int received, int total)? onProgress,
   }) async {
@@ -76,7 +87,7 @@ class ModelDownloader {
         throw SttException.downloadFailed('HTTP ${response.statusCode} for $url');
       }
 
-      final total = response.contentLength ?? -1;
+      final total = expectedSizeBytes ?? response.contentLength ?? -1;
       final file = File(destPath);
       await file.create(recursive: true);
       final sink = file.openWrite();
