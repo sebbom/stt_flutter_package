@@ -24,3 +24,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/hello_en.wav
+    - assets/denoisers/gtcrn/model.onnx
+    - assets/denoisers/dpdfnet/model.onnx

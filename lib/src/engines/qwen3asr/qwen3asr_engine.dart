@@ -3,9 +3,11 @@ import '../../stt_result.dart';
 import '../../cancellation_token.dart';
 import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
+import '../../audio/audio_chunker.dart';
 import '../offline_engine_base.dart';
 
 class Qwen3AsrInferenceEngine extends OfflineEngineBase {
+  static const ChunkingConfig _chunking = ChunkingConfig.defaultForTransducer;
   /// Qwen3-ASR defaults to Chinese output when no language hint is provided,
   /// so we fall back to a sensible default from the model descriptor's
   /// supported list. Callers can override via [SttEngine.setDefaultLanguage]
@@ -87,25 +89,33 @@ class Qwen3AsrInferenceEngine extends OfflineEngineBase {
       supportsExplicitLanguage: supportsExplicitLanguage,
     );
 
-    final stream = rec.createStream();
-    try {
-      stream.setOption(key: 'language', value: effective);
-      stream.acceptWaveform(samples: audio.samples, sampleRate: audio.sampleRate);
-      rec.decode(stream);
-      final result = rec.getResult(stream);
-      stopwatch.stop();
-      SttLogger.d(
-        'Qwen3-ASR result (lang=$effective): "${result.text}" '
-        'in ${stopwatch.elapsedMilliseconds}ms',
-      );
-      return SttResult(
-        text: result.text,
-        inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
-        lang: effective,
-      );
-    } finally {
-      stream.free();
+    final chunks = chunkBuffer(audio, config: _chunking);
+    final textParts = <String>[];
+    for (final chunk in chunks) {
+      token?.throwIfCancelled();
+      final stream = rec.createStream();
+      try {
+        stream.setOption(key: 'language', value: effective);
+        stream.acceptWaveform(
+            samples: chunk.samples, sampleRate: chunk.sampleRate);
+        rec.decode(stream);
+        final result = rec.getResult(stream);
+        if (result.text.isNotEmpty) textParts.add(result.text);
+      } finally {
+        stream.free();
+      }
     }
+    stopwatch.stop();
+    SttLogger.d(
+      'Qwen3-ASR result (${chunks.length} chunk${chunks.length == 1 ? "" : "s"}, '
+      'lang=$effective): "${textParts.join(" ")}" '
+      'in ${stopwatch.elapsedMilliseconds}ms',
+    );
+    return SttResult(
+      text: dedupJoinedText(textParts),
+      inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
+      lang: effective,
+    );
   }
 
   String _resolveLanguage(String? language) {

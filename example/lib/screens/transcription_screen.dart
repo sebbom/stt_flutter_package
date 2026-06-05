@@ -9,8 +9,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:stt_flutter/stt_flutter.dart';
 import '../utils/audio_diagnostics.dart';
+import '../utils/denoiser_bundle.dart';
 
 enum LangMode { auto, modelDefault, force }
+
+enum DenoiserSource { off, bundledGtcrn, bundledDpdfnet, custom }
 
 class TranscriptionScreen extends StatefulWidget {
   final ModelDescriptor model;
@@ -43,6 +46,7 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
   bool _noiseSuppression = false;
 
   DenoiserType _denoiserType = DenoiserType.none;
+  DenoiserSource _denoiserSource = DenoiserSource.off;
   String _denoiserModelDir = '';
   String _hotwordsText = '';
 
@@ -432,6 +436,53 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
             _denoiserModelDir.isEmpty ? null : _denoiserModelDir,
         denoiserType: _denoiserType,
       );
+
+  Future<void> _setDenoiserSource(DenoiserSource s) async {
+    setState(() {
+      _denoiserSource = s;
+      _denoiserType = DenoiserType.none;
+      _denoiserModelDir = '';
+    });
+    if (s == DenoiserSource.bundledGtcrn || s == DenoiserSource.bundledDpdfnet) {
+      if (mounted) setState(() => _loading = true);
+      try {
+        final file = s == DenoiserSource.bundledGtcrn
+            ? await DenoiserBundle.gtcrnModelFile()
+            : await DenoiserBundle.dpdfnetModelFile();
+        if (!mounted) return;
+        setState(() {
+          _denoiserType = s == DenoiserSource.bundledGtcrn
+              ? DenoiserType.gtcrn
+              : DenoiserType.dpdfnet;
+          _denoiserModelDir = DenoiserBundle.dirFor(file) ?? '';
+        });
+      } catch (e) {
+        if (mounted) {
+          setState(() => _error = 'Failed to extract denoiser: $e');
+        }
+      } finally {
+        if (mounted) setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _pickCustomDenoiserDir() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      allowMultiple: false,
+    );
+    if (result == null || result.files.single.path == null) return;
+    final path = result.files.single.path!;
+    final dir = path.contains('/') && !path.endsWith('.onnx')
+        ? path
+        : path.substring(0, path.lastIndexOf('/'));
+    if (!mounted) return;
+    setState(() {
+      _denoiserSource = DenoiserSource.custom;
+      _denoiserType = _denoiserType; // keep prior selection
+      _denoiserModelDir = dir;
+    });
+  }
 
   bool get _isZipformer => widget.model.type == SttModelType.sherpa;
   bool get _isSenseVoice => widget.model.type == SttModelType.sensevoice;
@@ -946,38 +997,42 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            SegmentedButton<DenoiserType>(
+            SegmentedButton<DenoiserSource>(
               segments: const [
                 ButtonSegment(
-                    value: DenoiserType.none,
+                    value: DenoiserSource.off,
                     label: Text('Off'),
                     icon: Icon(Icons.block)),
                 ButtonSegment(
-                    value: DenoiserType.gtcrn,
+                    value: DenoiserSource.bundledGtcrn,
                     label: Text('GTCRN'),
                     icon: Icon(Icons.graphic_eq)),
                 ButtonSegment(
-                    value: DenoiserType.dpdfnet,
+                    value: DenoiserSource.bundledDpdfnet,
                     label: Text('DPDFNet'),
                     icon: Icon(Icons.equalizer)),
               ],
-              selected: {_denoiserType},
-              onSelectionChanged: (s) =>
-                  setState(() => _denoiserType = s.first),
+              selected: {_denoiserSource},
+              onSelectionChanged: (s) => _setDenoiserSource(s.first),
             ),
             const SizedBox(height: 8),
-            TextField(
-              decoration: const InputDecoration(
-                labelText: 'Denoiser model directory',
-                helperText: 'Path containing model.onnx (GTCRN) or '
-                    'model.onnx + model_post.onnx (DPDFNet)',
-                isDense: true,
-                border: OutlineInputBorder(),
-              ),
-              controller: TextEditingController(text: _denoiserModelDir)
-                ..selection = TextSelection.collapsed(
-                    offset: _denoiserModelDir.length),
-              onChanged: (v) => _denoiserModelDir = v,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _denoiserModelDir.isEmpty
+                        ? 'No denoiser model selected'
+                        : 'Model dir: $_denoiserModelDir',
+                    style: theme.textTheme.bodySmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _pickCustomDenoiserDir,
+                  icon: const Icon(Icons.folder_open, size: 18),
+                  label: const Text('Custom…'),
+                ),
+              ],
             ),
             const Divider(height: 24),
             SwitchListTile.adaptive(

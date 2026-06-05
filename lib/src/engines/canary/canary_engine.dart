@@ -3,9 +3,11 @@ import '../../stt_result.dart';
 import '../../cancellation_token.dart';
 import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
+import '../../audio/audio_chunker.dart';
 import '../offline_engine_base.dart';
 
 class CanaryInferenceEngine extends OfflineEngineBase {
+  static const ChunkingConfig _chunking = ChunkingConfig.defaultForTransducer;
   String? _lastConfiguredLang;
   Map<String, String>? _modelFiles;
 
@@ -75,24 +77,32 @@ class CanaryInferenceEngine extends OfflineEngineBase {
     }
 
     final rec = recognizer;
-    final stream = rec.createStream();
-    try {
-      stream.acceptWaveform(samples: audio.samples, sampleRate: audio.sampleRate);
-      rec.decode(stream);
-      final result = rec.getResult(stream);
-      stopwatch.stop();
-      SttLogger.d(
-        'Canary result (lang=$target): "${result.text}" '
-        'in ${stopwatch.elapsedMilliseconds}ms',
-      );
-      return SttResult(
-        text: result.text,
-        inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
-        lang: result.lang.isNotEmpty ? result.lang : target,
-      );
-    } finally {
-      stream.free();
+    final chunks = chunkBuffer(audio, config: _chunking);
+    final textParts = <String>[];
+    for (final chunk in chunks) {
+      token?.throwIfCancelled();
+      final stream = rec.createStream();
+      try {
+        stream.acceptWaveform(
+            samples: chunk.samples, sampleRate: chunk.sampleRate);
+        rec.decode(stream);
+        final result = rec.getResult(stream);
+        if (result.text.isNotEmpty) textParts.add(result.text);
+      } finally {
+        stream.free();
+      }
     }
+    stopwatch.stop();
+    SttLogger.d(
+      'Canary result (${chunks.length} chunk${chunks.length == 1 ? "" : "s"}, '
+      'lang=$target): "${textParts.join(" ")}" '
+      'in ${stopwatch.elapsedMilliseconds}ms',
+    );
+    return SttResult(
+      text: dedupJoinedText(textParts),
+      inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
+      lang: target,
+    );
   }
 
   @override

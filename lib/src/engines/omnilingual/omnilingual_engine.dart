@@ -3,9 +3,11 @@ import '../../stt_result.dart';
 import '../../cancellation_token.dart';
 import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
+import '../../audio/audio_chunker.dart';
 import '../offline_engine_base.dart';
 
 class OmnilingualInferenceEngine extends OfflineEngineBase {
+  static const ChunkingConfig _chunking = ChunkingConfig.defaultForTransducer;
   OmnilingualInferenceEngine(super.model);
 
   @override
@@ -49,25 +51,36 @@ class OmnilingualInferenceEngine extends OfflineEngineBase {
       supportsExplicitLanguage: supportsExplicitLanguage,
     );
 
-    final stream = rec.createStream();
-    try {
-      stream.acceptWaveform(samples: audio.samples, sampleRate: audio.sampleRate);
-      rec.decode(stream);
-      final result = rec.getResult(stream);
-      stopwatch.stop();
-      SttLogger.d(
-        'Omnilingual result: "${result.text}" in ${stopwatch.elapsedMilliseconds}ms',
-      );
-      return SttResult(
-        text: result.text,
-        inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
-        lang: result.lang.isNotEmpty
-            ? result.lang
-            : (model.languages.isNotEmpty ? model.languages.first : null),
-      );
-    } finally {
-      stream.free();
+    final chunks = chunkBuffer(audio, config: _chunking);
+    final textParts = <String>[];
+    String? detectedLang;
+    for (final chunk in chunks) {
+      token?.throwIfCancelled();
+      final stream = rec.createStream();
+      try {
+        stream.acceptWaveform(
+            samples: chunk.samples, sampleRate: chunk.sampleRate);
+        rec.decode(stream);
+        final result = rec.getResult(stream);
+        if (result.text.isNotEmpty) textParts.add(result.text);
+        if (detectedLang == null && result.lang.isNotEmpty) {
+          detectedLang = result.lang;
+        }
+      } finally {
+        stream.free();
+      }
     }
+    stopwatch.stop();
+    SttLogger.d(
+      'Omnilingual result (${chunks.length} chunk${chunks.length == 1 ? "" : "s"}): '
+      '"${textParts.join(" ")}" in ${stopwatch.elapsedMilliseconds}ms',
+    );
+    return SttResult(
+      text: dedupJoinedText(textParts),
+      inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
+      lang: detectedLang ??
+          (model.languages.isNotEmpty ? model.languages.first : null),
+    );
   }
 
   @override

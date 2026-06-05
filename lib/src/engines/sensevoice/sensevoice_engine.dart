@@ -3,9 +3,11 @@ import '../../stt_result.dart';
 import '../../cancellation_token.dart';
 import '../../stt_logger.dart';
 import '../../audio/audio_buffer.dart';
+import '../../audio/audio_chunker.dart';
 import '../offline_engine_base.dart';
 
 class SenseVoiceInferenceEngine extends OfflineEngineBase {
+  static const ChunkingConfig _chunking = ChunkingConfig.defaultForTransducer;
   String? _lastConfiguredLang;
   String? _lastConfiguredTextNorm;
   Map<String, String>? _modelFiles;
@@ -76,30 +78,44 @@ class SenseVoiceInferenceEngine extends OfflineEngineBase {
     }
 
     final rec = recognizer;
-    final stream = rec.createStream();
-    try {
-      stream.acceptWaveform(samples: audio.samples, sampleRate: audio.sampleRate);
-      rec.decode(stream);
-      final result = rec.getResult(stream);
-      stopwatch.stop();
-      final parsed = parseSenseVoiceText(result.text);
-      SttLogger.d(
-        'SenseVoice result (lang=$target): "${parsed.text}" '
-        'emotion=${parsed.emotion} events=${parsed.events} '
-        'in ${stopwatch.elapsedMilliseconds}ms',
-      );
-      return SttResult(
-        text: parsed.text,
-        inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
-        lang: result.lang.isNotEmpty
-            ? result.lang
-            : (target == 'auto' ? null : target),
-        emotion: parsed.emotion,
-        events: parsed.events,
-      );
-    } finally {
-      stream.free();
+    final chunks = chunkBuffer(audio, config: _chunking);
+    final textParts = <String>[];
+    String? detectedLang;
+    String? firstEmotion;
+    final allEvents = <String>{};
+    for (final chunk in chunks) {
+      token?.throwIfCancelled();
+      final stream = rec.createStream();
+      try {
+        stream.acceptWaveform(
+            samples: chunk.samples, sampleRate: chunk.sampleRate);
+        rec.decode(stream);
+        final result = rec.getResult(stream);
+        final parsed = parseSenseVoiceText(result.text);
+        if (parsed.text.isNotEmpty) textParts.add(parsed.text);
+        if (detectedLang == null && result.lang.isNotEmpty) {
+          detectedLang = result.lang;
+        }
+        firstEmotion ??= parsed.emotion;
+        allEvents.addAll(parsed.events);
+      } finally {
+        stream.free();
+      }
     }
+    stopwatch.stop();
+    SttLogger.d(
+      'SenseVoice result (${chunks.length} chunk${chunks.length == 1 ? "" : "s"}, '
+      'lang=$target): "${textParts.join(" ")}" '
+      'emotion=$firstEmotion events=$allEvents '
+      'in ${stopwatch.elapsedMilliseconds}ms',
+    );
+    return SttResult(
+      text: dedupJoinedText(textParts),
+      inferenceTimeMs: stopwatch.elapsedMicroseconds / 1000,
+      lang: detectedLang ?? (target == 'auto' ? null : target),
+      emotion: firstEmotion,
+      events: allEvents.toList(),
+    );
   }
 
   @override
