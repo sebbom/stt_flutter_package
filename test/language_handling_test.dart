@@ -44,7 +44,6 @@ AudioBuffer _buffer() => AudioBuffer(
 void main() {
   group('Language handling plumbing (no real model)', () {
     test('voxtral is removed from SttModelType', () {
-      expect(SttModelType.values, hasLength(4));
       expect(SttModelType.values.any((e) => e.name == 'voxtral'), false);
     });
 

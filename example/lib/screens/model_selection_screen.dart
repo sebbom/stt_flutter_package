@@ -130,6 +130,9 @@ class _ModelSelectionScreenState extends State<ModelSelectionScreen> {
       SttModelType.sherpa,
       SttModelType.nemo,
       SttModelType.canary,
+      SttModelType.sensevoice,
+      SttModelType.omnilingual,
+      SttModelType.qwen3asr,
     ];
     final map = <SttModelType, List<ModelDescriptor>>{
       for (final t in order) t: <ModelDescriptor>[],
@@ -153,6 +156,12 @@ class _ModelSelectionScreenState extends State<ModelSelectionScreen> {
         return 'NeMo Parakeet (multilingual TDT)';
       case SttModelType.canary:
         return 'NVIDIA Canary (en/es/de/fr)';
+      case SttModelType.sensevoice:
+        return 'SenseVoice Small (zh/en/ja/ko/yue, emotion)';
+      case SttModelType.omnilingual:
+        return 'Omnilingual CTC (1600 languages)';
+      case SttModelType.qwen3asr:
+        return 'Qwen3-ASR 0.6B (autoregressive)';
     }
   }
 }
@@ -215,6 +224,12 @@ class _ModelCardState extends State<_ModelCard> {
         return Icons.language;
       case SttModelType.canary:
         return Icons.record_voice_over;
+      case SttModelType.sensevoice:
+        return Icons.psychology;
+      case SttModelType.omnilingual:
+        return Icons.public;
+      case SttModelType.qwen3asr:
+        return Icons.auto_awesome;
     }
   }
 

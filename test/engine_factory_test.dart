@@ -4,11 +4,14 @@ import 'package:stt_flutter/src/engines/engine_factory.dart';
 
 void main() {
   group('EngineFactory', () {
-    test('only four model types are exposed', () {
-      expect(SttModelType.values, hasLength(4));
+    test('seven model types are exposed', () {
+      expect(SttModelType.values, hasLength(7));
       expect(
         SttModelType.values.map((e) => e.name).toSet(),
-        {'whisper', 'sherpa', 'nemo', 'canary'},
+        {
+          'whisper', 'sherpa', 'nemo', 'canary',
+          'sensevoice', 'omnilingual', 'qwen3asr',
+        },
       );
     });
 

@@ -64,8 +64,10 @@ void main() {
       for (final file in model.files) {
         expect(file.url.startsWith('https://'), true,
             reason: '${model.id}: ${file.filename} URL must be HTTPS');
-        expect(file.filename.contains('/'), false,
-            reason: '${model.id}: filename must not contain path separators');
+        final isTokenizerEntry = file.filename.startsWith('tokenizer/');
+        expect(file.filename.contains('/'), isTokenizerEntry,
+            reason:
+                '${model.id}: filename "${file.filename}" must not contain path separators unless it is a tokenizer subdirectory');
       }
     }
   });
