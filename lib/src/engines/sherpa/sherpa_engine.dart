@@ -18,6 +18,9 @@ class SherpaInferenceEngine extends OfflineEngineBase {
     final joiner = findFile(modelFiles, ['joiner.onnx', 'joiner']);
     final tokens = findFile(modelFiles, ['tokens.txt', 'tokens']);
 
+    final hotwordsFile = _resolveHotwordsFile(modelFiles);
+    final hotwordsScore = _resolveHotwordsScore();
+
     final config = OfflineRecognizerConfig(
       model: OfflineModelConfig(
         transducer: OfflineTransducerModelConfig(
@@ -32,13 +35,42 @@ class SherpaInferenceEngine extends OfflineEngineBase {
         modelType: 'zipformer2',
       ),
       decodingMethod: 'greedy_search',
+      hotwordsFile: hotwordsFile,
+      hotwordsScore: hotwordsScore,
     );
 
     setRecognizer(OfflineRecognizer(config));
     SttLogger.d(
       'SherpaInferenceEngine: loaded zipformer2 model (${model.id}); '
-      'supportsExplicitLanguage=$supportsExplicitLanguage',
+      'supportsExplicitLanguage=$supportsExplicitLanguage, '
+      'hotwordsFile=${hotwordsFile.isEmpty ? "<none>" : hotwordsFile}, '
+      'hotwordsScore=$hotwordsScore',
     );
+  }
+
+  String _resolveHotwordsFile(Map<String, String> modelFiles) {
+    for (final file in model.files) {
+      final path = file.hotwordsFile;
+      if (path == null || path.isEmpty) continue;
+      final resolved = modelFiles[file.filename];
+      if (resolved != null && resolved.isNotEmpty) return resolved;
+      final inDir = file.filename;
+      for (final entry in modelFiles.entries) {
+        if (entry.key.endsWith(inDir) || entry.value.endsWith(inDir)) {
+          return entry.value;
+        }
+      }
+      return path;
+    }
+    return '';
+  }
+
+  double _resolveHotwordsScore() {
+    for (final file in model.files) {
+      final score = file.hotwordsScore;
+      if (score != null) return score;
+    }
+    return 1.5;
   }
 
   @override

@@ -7,11 +7,26 @@ class ModelFile {
   final String? sha256;
   final int? sizeBytes;
 
+  /// Local file path to a hotwords text file consumed by Zipformer-based
+  /// recognizers. One entry per line, formatted as `"word score"`.
+  final String? hotwordsFile;
+
+  /// Score applied to entries in [hotwordsFile]. Default is 1.5.
+  final double? hotwordsScore;
+
+  /// Raw hotwords string (used by Qwen3-ASR which accepts a string instead
+  /// of a file). Format is the same as [hotwordsFile]: one entry per line,
+  /// `"word score"`.
+  final String? hotwordsString;
+
   const ModelFile({
     required this.url,
     required this.filename,
     this.sha256,
     this.sizeBytes,
+    this.hotwordsFile,
+    this.hotwordsScore,
+    this.hotwordsString,
   });
 }
 

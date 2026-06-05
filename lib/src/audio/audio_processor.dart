@@ -1,9 +1,15 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:sherpa_onnx/sherpa_onnx.dart';
 import 'audio_buffer.dart';
+import '../stt_logger.dart';
 
 enum NormalizeMode { none, peak, rms }
+
+/// Which sherpa-onnx denoiser to apply. The actual on-disk model files are
+/// referenced by [PreprocessConfig.denoiserModelDir] + [denoiserModelFile].
+enum DenoiserType { none, gtcrn, dpdfnet }
 
 class PreprocessConfig {
   final double gain;
@@ -13,6 +19,24 @@ class PreprocessConfig {
   final double peakTarget;
   final double rmsTarget;
 
+  /// Request live microphone noise suppression. The actual suppression is
+  /// applied by an external Flutter plugin (e.g. `noise_suppression`); this
+  /// flag is surfaced to consumers so they can wire the platform-side hook.
+  final bool noiseSuppression;
+
+  /// Directory containing the sherpa-onnx denoiser model files. When
+  /// [denoiserType] is `gtcrn`, the loader looks for `model.onnx` inside this
+  /// directory. When `dpdfnet`, it looks for `model.onnx` and may also
+  /// require `model_post.onnx`. Empty disables denoising.
+  final String? denoiserModelDir;
+
+  /// Which sherpa-onnx denoiser family to use.
+  final DenoiserType denoiserType;
+
+  /// Number of threads to use for the denoiser session. 0 means
+  /// "use engine default" (1).
+  final int denoiserNumThreads;
+
   const PreprocessConfig({
     this.gain = 1.0,
     this.normalize = NormalizeMode.none,
@@ -20,12 +44,25 @@ class PreprocessConfig {
     this.highPassCutoffHz = 80.0,
     this.peakTarget = 0.95,
     this.rmsTarget = 0.1,
+    this.noiseSuppression = false,
+    this.denoiserModelDir,
+    this.denoiserType = DenoiserType.none,
+    this.denoiserNumThreads = 0,
   });
 
   static const none = PreprocessConfig();
 
+  bool get hasDenoiser =>
+      denoiserType != DenoiserType.none &&
+      denoiserModelDir != null &&
+      denoiserModelDir!.isNotEmpty;
+
   bool get isNoOp =>
-      gain == 1.0 && normalize == NormalizeMode.none && !highPass;
+      gain == 1.0 &&
+      normalize == NormalizeMode.none &&
+      !highPass &&
+      !hasDenoiser &&
+      !noiseSuppression;
 }
 
 class AudioProcessor {
@@ -40,11 +77,40 @@ class AudioProcessor {
     final file = File(path);
     final bytes = await file.readAsBytes();
     final buf = _parseWavBytes(bytes);
-    return preprocess.isNoOp ? buf : applyPreprocess(buf, preprocess);
+    if (preprocess.isNoOp) return buf;
+    final afterDenoise = await _maybeDenoise(buf, preprocess);
+    return applyPreprocess(afterDenoise, preprocess);
   }
 
-  /// Apply a preprocessing pipeline in this order: high-pass → gain → normalize.
+  /// Apply a preprocessing pipeline in this order:
+  ///   denoiser → high-pass → gain → normalize.
   /// Returns a new buffer; the input is not modified.
+  static Future<AudioBuffer> applyPreprocessAsync(
+    AudioBuffer buf,
+    PreprocessConfig cfg,
+  ) async {
+    if (cfg.isNoOp) return buf;
+    var b = await _maybeDenoise(buf, cfg);
+    if (cfg.highPass) {
+      b = highPass(b, cutoffHz: cfg.highPassCutoffHz);
+    }
+    if (cfg.gain != 1.0) {
+      b = applyGain(b, cfg.gain);
+    }
+    switch (cfg.normalize) {
+      case NormalizeMode.peak:
+        b = peakNormalize(b, target: cfg.peakTarget);
+      case NormalizeMode.rms:
+        b = rmsNormalize(b, target: cfg.rmsTarget);
+      case NormalizeMode.none:
+        break;
+    }
+    return b;
+  }
+
+  /// Apply the synchronous portion of the preprocessing pipeline.
+  /// The denoiser step is skipped (it requires async); use
+  /// [applyPreprocessAsync] for the full pipeline.
   static AudioBuffer applyPreprocess(AudioBuffer buf, PreprocessConfig cfg) {
     if (cfg.isNoOp) return buf;
     var b = buf;
@@ -63,6 +129,50 @@ class AudioProcessor {
         break;
     }
     return b;
+  }
+
+  static Future<AudioBuffer> _maybeDenoise(
+    AudioBuffer buf,
+    PreprocessConfig cfg,
+  ) async {
+    if (!cfg.hasDenoiser) return buf;
+    final dir = cfg.denoiserModelDir!;
+    String? modelFile;
+    if (cfg.denoiserType == DenoiserType.gtcrn) {
+      modelFile = '$dir/model.onnx';
+    } else if (cfg.denoiserType == DenoiserType.dpdfnet) {
+      modelFile = '$dir/model.onnx';
+    }
+    if (modelFile == null || !File(modelFile).existsSync()) {
+      SttLogger.w(
+        'Denoiser model not found at $modelFile — skipping denoise step.',
+      );
+      return buf;
+    }
+    final config = OfflineSpeechDenoiserConfig(
+      model: OfflineSpeechDenoiserModelConfig(
+        gtcrn: cfg.denoiserType == DenoiserType.gtcrn
+            ? OfflineSpeechDenoiserGtcrnModelConfig(model: modelFile)
+            : const OfflineSpeechDenoiserGtcrnModelConfig(),
+        dpdfnet: cfg.denoiserType == DenoiserType.dpdfnet
+            ? OfflineSpeechDenoiserDpdfNetModelConfig(model: modelFile)
+            : const OfflineSpeechDenoiserDpdfNetModelConfig(),
+        numThreads: cfg.denoiserNumThreads > 0 ? cfg.denoiserNumThreads : 1,
+        debug: false,
+        provider: 'cpu',
+      ),
+    );
+    final denoiser = OfflineSpeechDenoiser(config);
+    try {
+      final out = denoiser.run(samples: buf.samples, sampleRate: buf.sampleRate);
+      if (out.samples.isEmpty) {
+        SttLogger.w('Denoiser returned empty samples — skipping denoise step.');
+        return buf;
+      }
+      return AudioBuffer(samples: out.samples, sampleRate: out.sampleRate);
+    } finally {
+      denoiser.free();
+    }
   }
 
   /// Multiply every sample by [gain] and clamp to `[-1, 1]` to avoid wrap-around.

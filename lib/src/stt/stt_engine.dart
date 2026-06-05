@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:sherpa_onnx/sherpa_onnx.dart';
 import '../stt_flutter_impl.dart';
@@ -9,11 +10,15 @@ import '../stt_logger.dart';
 import '../audio/audio_processor.dart';
 
 class SttEngine {
+  static const String _hotwordsFilename = 'hotwords.txt';
+  static const String _hotwordsTmpFilename = 'hotwords.txt.tmp';
+
   static bool _initialized = false;
 
   SttFlutter? _stt;
   ModelDescriptor? _model;
   String? _defaultLanguage;
+  String? _modelDir;
   bool _cancelRequested = false;
 
   SttEngine._();
@@ -23,17 +28,23 @@ class SttEngine {
   bool get isReady => _stt != null && !_cancelRequested;
   ModelDescriptor? get currentModel => _model;
   String? get currentDefaultLanguage => _defaultLanguage;
+  String? get currentModelDir => _modelDir;
 
   /// Load [model] into the engine. If [defaultLanguage] is provided, it is
   /// used as the default for subsequent transcribe calls when no per-call
   /// `language` override is supplied. Pass `null` (the default) to enable
   /// auto-detect mode.
   ///
+  /// If [hotwords] is non-empty, it is written to `<modelDir>/hotwords.txt`
+  /// and consumed by Zipformer (or any other model that supports hotwords).
+  /// One entry per line, formatted as `"word score"`.
+  ///
   /// Returns `null` on success, or an [SttException] on failure.
   Future<SttException?> loadModel(
     ModelDescriptor model, {
     String? modelDir,
     String? defaultLanguage,
+    String? hotwords,
   }) async {
     try {
       if (!_initialized) {
@@ -49,6 +60,9 @@ class SttEngine {
           await ModelDownloader.download(model, storagePath: modelDir);
         }
       }
+      if (hotwords != null) {
+        await _writeHotwords(modelDir, hotwords);
+      }
       final stt = _stt!;
       await stt.initialize(
         model: model,
@@ -56,6 +70,7 @@ class SttEngine {
         language: defaultLanguage,
       );
       _model = model;
+      _modelDir = modelDir;
       _defaultLanguage =
           (defaultLanguage != null && defaultLanguage.isNotEmpty)
               ? defaultLanguage
@@ -65,11 +80,44 @@ class SttEngine {
       await _stt?.dispose();
       _stt = null;
       _model = null;
+      _modelDir = null;
       _defaultLanguage = null;
       SttLogger.e('SttEngine.loadModel failed', e, st);
       if (e is SttException) return e;
       return SttException.modelLoadFailed(e.toString());
     }
+  }
+
+  /// Update the hotwords text used by the currently loaded model. Writes
+  /// `<modelDir>/hotwords.txt` and reloads the engine. The model must already
+  /// be loaded via [loadModel].
+  Future<SttException?> setHotwords(String? text) async {
+    final m = _model;
+    final dir = _modelDir;
+    if (m == null || dir == null) {
+      return SttException.notInitialized('SttEngine');
+    }
+    final defaultLang = _defaultLanguage;
+    await _writeHotwords(dir, text ?? '');
+    return loadModel(
+      m,
+      modelDir: dir,
+      defaultLanguage: defaultLang,
+      hotwords: text,
+    );
+  }
+
+  static Future<void> _writeHotwords(String modelDir, String text) async {
+    final file = File('$modelDir/$_hotwordsFilename');
+    final tmp = File('$modelDir/$_hotwordsTmpFilename');
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      if (await file.exists()) await file.delete();
+      if (await tmp.exists()) await tmp.delete();
+      return;
+    }
+    await tmp.writeAsString(trimmed.endsWith('\n') ? trimmed : '$trimmed\n');
+    await tmp.rename(file.path);
   }
 
   Future<SttResult> transcribeFile(

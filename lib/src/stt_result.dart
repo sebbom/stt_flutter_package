@@ -4,6 +4,8 @@ class SttResult {
   final String? lang;
   final double? confidence;
   final double? durationMs;
+  final String? emotion;
+  final List<String> events;
 
   const SttResult({
     required this.text,
@@ -11,5 +13,7 @@ class SttResult {
     this.lang,
     this.confidence,
     this.durationMs,
+    this.emotion,
+    this.events = const <String>[],
   });
 }

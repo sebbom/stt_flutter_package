@@ -40,6 +40,11 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
   NormalizeMode _normalize = NormalizeMode.none;
   bool _highPass = false;
   double _preprocessGain = 1.0;
+  bool _noiseSuppression = false;
+
+  DenoiserType _denoiserType = DenoiserType.none;
+  String _denoiserModelDir = '';
+  String _hotwordsText = '';
 
   final List<int> _speechBuffer = [];
   StreamSubscription<Float32List>? _captureSub;
@@ -422,7 +427,27 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
         gain: _preprocessGain,
         normalize: _normalize,
         highPass: _highPass,
+        noiseSuppression: _noiseSuppression,
+        denoiserModelDir:
+            _denoiserModelDir.isEmpty ? null : _denoiserModelDir,
+        denoiserType: _denoiserType,
       );
+
+  bool get _isZipformer => widget.model.type == SttModelType.sherpa;
+  bool get _isSenseVoice => widget.model.type == SttModelType.sensevoice;
+  bool get _supportsHotwords => _isZipformer;
+
+  Future<void> _applyHotwords() async {
+    if (!_isZipformer) return;
+    if (mounted) setState(() => _loading = true);
+    final err = await SttEngine.instance.setHotwords(_hotwordsText);
+    if (mounted) {
+      setState(() {
+        _loading = false;
+        if (err != null) _error = err.toString();
+      });
+    }
+  }
 
   Future<void> _transcribeFile(String path,
       {required String source}) async {
@@ -627,6 +652,8 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
         const SizedBox(height: 12),
         _languageModeCard(theme),
         const SizedBox(height: 12),
+        if (_supportsHotwords) _hotwordsCard(theme),
+        if (_supportsHotwords) const SizedBox(height: 12),
         _preprocessCard(theme),
         const SizedBox(height: 12),
         _actionsCard(theme),
@@ -695,6 +722,12 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
         return Icons.language;
       case SttModelType.canary:
         return Icons.record_voice_over;
+      case SttModelType.sensevoice:
+        return Icons.psychology;
+      case SttModelType.omnilingual:
+        return Icons.public;
+      case SttModelType.qwen3asr:
+        return Icons.auto_awesome;
     }
   }
 
@@ -708,6 +741,12 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
         return 'NeMo Parakeet';
       case SttModelType.canary:
         return 'Canary';
+      case SttModelType.sensevoice:
+        return 'SenseVoice (emotion + events)';
+      case SttModelType.omnilingual:
+        return 'Omnilingual CTC (1600 languages)';
+      case SttModelType.qwen3asr:
+        return 'Qwen3-ASR (autoregressive LLM)';
     }
   }
 
@@ -889,6 +928,122 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
                   ),
                 ),
               ),
+            const Divider(height: 24),
+            Row(
+              children: [
+                Icon(Icons.noise_aware, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text('Denoiser (sherpa-onnx)',
+                    style: theme.textTheme.titleSmall),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Neural speech enhancement (GTCRN or DPDFNet). Requires the '
+              'sherpa-onnx denoiser model file in a local directory.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<DenoiserType>(
+              segments: const [
+                ButtonSegment(
+                    value: DenoiserType.none,
+                    label: Text('Off'),
+                    icon: Icon(Icons.block)),
+                ButtonSegment(
+                    value: DenoiserType.gtcrn,
+                    label: Text('GTCRN'),
+                    icon: Icon(Icons.graphic_eq)),
+                ButtonSegment(
+                    value: DenoiserType.dpdfnet,
+                    label: Text('DPDFNet'),
+                    icon: Icon(Icons.equalizer)),
+              ],
+              selected: {_denoiserType},
+              onSelectionChanged: (s) =>
+                  setState(() => _denoiserType = s.first),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              decoration: const InputDecoration(
+                labelText: 'Denoiser model directory',
+                helperText: 'Path containing model.onnx (GTCRN) or '
+                    'model.onnx + model_post.onnx (DPDFNet)',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              controller: TextEditingController(text: _denoiserModelDir)
+                ..selection = TextSelection.collapsed(
+                    offset: _denoiserModelDir.length),
+              onChanged: (v) => _denoiserModelDir = v,
+            ),
+            const Divider(height: 24),
+            SwitchListTile.adaptive(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Live mic noise suppression (flag)'),
+              subtitle: Text(
+                'UI hook — wire a platform plugin (e.g. noise_suppression) '
+                'to actually filter the mic stream.',
+                style: theme.textTheme.bodySmall,
+              ),
+              value: _noiseSuppression,
+              onChanged: (v) => setState(() => _noiseSuppression = v),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _hotwordsCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.bolt, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Text('Hotwords (Zipformer)', style: theme.textTheme.titleSmall),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'One entry per line, formatted as "word score". Boosts the '
+              'likelihood of these words in the output.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              maxLines: 4,
+              minLines: 2,
+              decoration: const InputDecoration(
+                labelText: 'hotwords.txt contents',
+                hintText: 'kubernetes 2.0\nkubeflow 1.8',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              controller: TextEditingController(text: _hotwordsText)
+                ..selection =
+                    TextSelection.collapsed(offset: _hotwordsText.length),
+              onChanged: (v) => _hotwordsText = v,
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.tonalIcon(
+                onPressed: _loading ? null : _applyHotwords,
+                icon: const Icon(Icons.save, size: 18),
+                label: const Text('Apply hotwords'),
+              ),
+            ),
           ],
         ),
       ),
@@ -1048,6 +1203,12 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
                   '${r.inferenceTimeMs.toStringAsFixed(0)}ms',
                 ),
                 _metricChip(theme, 'mode', _langMode.name),
+                if (_isSenseVoice) ...[
+                  if (r.emotion != null && r.emotion!.isNotEmpty)
+                    _metricChip(theme, 'emotion', r.emotion!),
+                  if (r.events.isNotEmpty)
+                    _metricChip(theme, 'events', r.events.join(', ')),
+                ],
               ],
             ),
           ],
