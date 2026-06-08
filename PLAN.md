@@ -20,7 +20,10 @@ Fully local, on-device speech-to-text for Flutter using ONNX models via `sherpa_
 │         ├─ WhisperInferenceEngine  (OfflineRecognizer, whisper)    │
 │         ├─ SherpaInferenceEngine   (OfflineRecognizer, zipformer2) │
 │         ├─ NemoInferenceEngine     (OfflineRecognizer, nemo_trans) │
-│         └─ CanaryInferenceEngine   (OfflineRecognizer, canary)     │
+│         ├─ CanaryInferenceEngine   (OfflineRecognizer, canary)     │
+│         ├─ SenseVoiceInferenceEngine (OfflineRecognizer, sense_v)  │
+│         ├─ OmnilingualInferenceEngine (OfflineRecognizer, omnili)  │
+│         └─ Qwen3AsrInferenceEngine  (OfflineRecognizer, qwen3)     │
 │                                                                   │
 │  All inference: native sherpa_onnx FFI — non-blocking on main    │
 │                                                                   │
@@ -62,7 +65,7 @@ Users register any ONNX model in one line. The package ships with seeded models.
 
 ```dart
 // --- Core types ---
-enum SttModelType { whisper, sherpa, nemo, canary }  // 4 supported types
+enum SttModelType { whisper, sherpa, nemo, canary, sensevoice, omnilingual, qwen3asr }  // 7 supported types
 
 class ModelDescriptor {
   final String id;                // "whisper-tiny", "sherpa-zipformer-en"
@@ -77,6 +80,10 @@ class ModelFile {
   final String url;               // Download URL
   final String filename;          // Local filename
   final String? sha256;           // Optional integrity hash
+  final int? sizeBytes;           // Known file size for fast verification
+  final String? hotwordsFile;     // Hotwords file path (Zipformer)
+  final double? hotwordsScore;    // Hotword boost score (Zipformer)
+  final String? hotwordsString;   // Comma-separated hotwords (Qwen3)
 }
 
 // --- Singleton registry ---
@@ -125,6 +132,10 @@ map in `engine_factory.dart`.
 | `sherpa-zipformer-en` | Sherpa | en | k2-fsa GH | ~300 MB |
 | `parakeet-tdt-0.6b-multilingual` | NeMo Parakeet | 25 langs | HF ONNX | ~400 MB |
 | `canary-180m-en-es-de-fr` | Canary | en, es, de, fr | HF ONNX | ~200 MB |
+| `sensevoice-small` | SenseVoice | zh, en, ja, ko, yue | HF ONNX | ~250 MB |
+| `omnilingual-300m-ctc-v2` | Omnilingual | 1600 langs | HF ONNX | ~1.3 GB |
+| `omnilingual-1b-ctc` | Omnilingual | 1600 langs | HF ONNX | ~3.9 GB |
+| `qwen3-asr-0.6b` | Qwen3-ASR | multilingual | HF ONNX | ~1 GB |
 
 Sherpa models are downloaded as `.tar.bz2` and extracted via `package:archive`.
 Whisper, Parakeet, Nemo, and Canary models use sherpa-onnx's individual-file ONNX format.
@@ -232,6 +243,9 @@ Engine behaviour per language mode:
 | Sherpa (zipformer) | ❌ | Logs warning, uses model's native language | Same — model is monolingual |
 | Nemo (Parakeet) | ✅ | `stream.setOption('language', code)` | `result.lang` is empty (Parakeet doesn't tag tokens with language) — fallback to `LanguageDetector` |
 | Canary | ✅ | `stream.setOption('srcLang'/'tgtLang', code)` | Uses `model.languages.first` set at `load()` time |
+| SenseVoice | ✅ | `stream.setOption('language', code)` + recreates recognizer | Uses `model.languages.first` (typically `auto` → detects internally) |
+| Omnilingual | ✅ | `stream.setOption('language', code)` | Uses `model.languages.first` |
+| Qwen3-ASR | ✅ | `stream.setOption('language', code)` | Defaults to `'en'` with warning log (no auto mode) |
 
 When a forced language is **not in** the model's `supportedLanguages`, the
 engine logs a warning (`SttLogger.w`) and continues. This is a soft signal
@@ -308,7 +322,111 @@ language differs from this default — avoiding an unnecessary FFI round-trip.
 
 ---
 
-## Public API
+## SenseVoice Engine
+
+**Files needed:** `model.int8.onnx`, `tokens.txt`, `tokenizer/` (vocab.json, merges.txt, tokenizer_config.json)
+
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'sense_voice'`.
+`OfflineSenseVoiceModelConfig` includes `language` and `use_itn` fields set at
+`load()` time. The engine recreates the recognizer when the language changes.
+
+Output parsing: SenseVoice returns tokens in the format
+`<|lang|><|EMOTION|><|event|><|withitn|>text`. The parser uses `<|` / `|>` as
+paired delimiters. Known language tags (`auto, zh, en, yue, ja, ko`) are
+stripped. Emotion tags (`neutral, happy, angry, sad, surprised, unknown`) become
+`SttResult.emotion`. Control tags (`nospeech, withitn, woitn`) are stripped.
+All other tags become `SttResult.events`.
+
+---
+
+## Omnilingual ASR Engine
+
+**Files needed:** `model.onnx` + `model.weights` (or single `model.onnx` for CTC), `tokens.txt`
+
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'omnilingual_asr_ctc'`.
+`OfflineOmnilingualAsrCtcModelConfig` — no language-specific config needed; the
+model detects language internally. 300M and 1B variants supported.
+
+---
+
+## Qwen3-ASR Engine
+
+**Files needed:** `conv_frontend.onnx`, `encoder.int8.onnx`, `decoder.int8.onnx`, `tokenizer/` (vocab.json, merges.txt, tokenizer_config.json)
+
+Uses `sherpa_onnx.OfflineRecognizer` with `modelType: 'qwen3_asr'`.
+`OfflineQwen3AsrModelConfig` — `tokenizer` field must point to a **directory**
+(C++ `Validate()` checks `tokenizer + "/vocab.json"`, etc.). Engine derives
+directory from the `tokenizer/vocab.json` entry by stripping the basename.
+
+Language handling: C++ reads `stream->GetOption("language")` and prefixes the
+prompt with `"language <code>"`. The engine sets `supportsExplicitLanguage =
+true` and calls `stream.setOption(key: 'language', value: effective)`. When no
+language is supplied, it defaults to `'en'` with a `SttLogger.w` warning (no
+auto-detect mode in the C++ implementation).
+
+---
+
+## Audio Chunking
+
+All engines that use `sherpa_onnx.OfflineRecognizer` have a per-stream limit
+(typically 30 s for transducer/CTC models). Long audio is handled via
+`chunkBuffer()` from `lib/src/audio/audio_chunker.dart`:
+
+| Engine family | `ChunkingConfig` | Window | Overlap |
+|---|---|---|---|
+| Whisper | `ChunkingConfig.whisper` | 30 s | 5 s |
+| Zipformer, NeMo, Canary, SenseVoice, Omnilingual, Qwen3 | `ChunkingConfig.defaultForTransducer` | 30 s | 2 s |
+| No chunking | `ChunkingConfig.none` | 30 s | 0 s |
+
+Each chunk is processed independently. `dedupJoinedText` strips a fuzzy-matched
+prefix from chunk N+1 to remove duplicated text at the overlap boundary
+(case-insensitive, with last-4-character fallback for noisy tokens).
+
+---
+
+## Denoiser (GTCRN / DPDFNet)
+
+The `OfflineSpeechDenoiser` from sherpa-onnx is applied as the first step in
+the preprocessing pipeline (before high-pass, gain, normalize). Two model
+families are supported:
+
+| Model | Sherpa-onnx config | ONNX files |
+|---|---|---|
+| GTCRN | `OfflineSpeechDenoiserGtcrnModelConfig` | `model.onnx` (535 KB) |
+| DPDFNet | `OfflineSpeechDenoiserDpdfNetModelConfig` | `model.onnx` (10 MB) + `model_post.onnx` (optional) |
+
+The library accepts a plain file path via `PreprocessConfig.denoiserModelDir`.
+The example app bundles both denoiser models via Flutter assets
+(`assets/denoisers/{gtcrn,dpdfnet}/model.onnx`) and extracts them to a temp
+directory on first use via `DenoiserBundle`.
+
+---
+
+## Hotwords
+
+Two engines support hotwords:
+
+- **Zipformer**: `hotwordsFile` + `hotwordsScore` on `OfflineRecognizerConfig`.
+  The engine writes hotwords to `<modelDir>/hotwords.txt` and reloads the
+  recognizer. Hotwords are one word per line.
+- **Qwen3-ASR**: `OfflineQwen3AsrModelConfig.hotwords` is a single comma-separated
+  string (ASCII comma). Passed directly to the config at load time.
+
+---
+
+## Audio Preprocessing Pipeline
+
+`PreprocessConfig` controls the pipeline, applied in this order:
+
+1. **Denoiser** — `OfflineSpeechDenoiser` (async, removes background noise)
+2. **High-pass** — First-order IIR RC filter (80 Hz cutoff, removes DC offset)
+3. **Gain** — Multiply samples, clamp to [-1, 1]
+4. **Normalize** — Peak (target 0.95) or RMS (target 0.1)
+
+`PreprocessConfig.none` is the default (all steps disabled). `isNoOp` returns
+true when all steps are at their default values. `noiseSuppression` is a UI hook
+for a platform plugin (e.g. `noise_suppression`); the library only surfaces the
+flag.
 
 ```dart
 /// Main entry point. Runs on the main isolate, delegates to native sherpa_onnx.
@@ -365,52 +483,75 @@ lib/
 ├── stt_flutter.dart                       # Public exports
 ├── src/
 │   ├── stt_flutter_impl.dart              # SttFlutter (main isolate facade)
-│   ├── stt_config.dart                    # SttModelType, SttConfig
-│   ├── stt_result.dart                    # SttResult (text, lang, confidence, durationMs)
+│   ├── stt_config.dart                    # SttModelType (7 types), SttConfig
+│   ├── stt_result.dart                    # SttResult (text, lang, confidence, durationMs, emotion, events)
 │   ├── stt_logger.dart                    # Structured logging
 │   ├── stt_exception.dart                 # Custom exception types
 │   ├── cancellation_token.dart            # CancellationToken
 │   ├── compute_worker.dart                # One-shot Isolate.run for resample
-│   ├── model_registry.dart                # ModelRegistry, ModelDescriptor
-│   ├── model_downloader.dart              # HTTP download + progress + tar.bz2 extract
+│   ├── model_registry.dart                # ModelRegistry, ModelDescriptor, ModelFile (hotwords, sizeBytes)
+│   ├── model_downloader.dart              # HTTP download + progress + tar.bz2 extract + size verification
 │   ├── stt/
-│   │   └── stt_engine.dart                # SttEngine (singleton, initBindings)
+│   │   └── stt_engine.dart                # SttEngine (singleton, initBindings, setHotwords)
 │   ├── audio/
 │   │   ├── audio_buffer.dart              # AudioBuffer data class
-│   │   ├── audio_processor.dart           # Resample, WAV parse (16/24/32-bit, float, multi-channel)
+│   │   ├── audio_processor.dart           # Resample, WAV parse, PreprocessConfig, denoiser, normalize
+│   │   ├── audio_chunker.dart             # ChunkingConfig, chunkBuffer, dedupJoinedText
 │   │   ├── audio_capture.dart             # Streaming audio capture (record package, Float32)
 │   │   └── vad.dart                       # SherpaOnnxVadEngine wrapper
 │   ├── language/
 │   │   └── language_detector.dart         # sherpa_onnx SpokenLanguageIdentification wrapper
 │   ├── engines/
 │   │   ├── inference_engine.dart          # Abstract InferenceEngine
-│   │   ├── engine_factory.dart            # ModelDescriptor → InferenceEngine
-│   │   ├── offline_engine_base.dart       # Shared scaffolding for all 4 engines
+│   │   ├── engine_factory.dart            # ModelDescriptor → InferenceEngine (7 types)
+│   │   ├── offline_engine_base.dart       # Shared scaffolding for all 7 engines
 │   │   ├── whisper/whisper_engine.dart    # OfflineRecognizer, modelType: 'whisper'
 │   │   ├── sherpa/sherpa_engine.dart      # OfflineRecognizer, modelType: 'zipformer2'
 │   │   ├── canary/canary_engine.dart      # OfflineRecognizer, modelType: 'canary'
-│   │   └── nemo/nemo_engine.dart          # OfflineRecognizer, modelType: 'nemo_transducer'
+│   │   ├── nemo/nemo_engine.dart          # OfflineRecognizer, modelType: 'nemo_transducer'
+│   │   ├── sensevoice/sensevoice_engine.dart  # OfflineRecognizer, modelType: 'sense_voice'
+│   │   ├── omnilingual/omnilingual_engine.dart # OfflineRecognizer, modelType: 'omnilingual_asr_ctc'
+│   │   └── qwen3asr/qwen3asr_engine.dart      # OfflineRecognizer, modelType: 'qwen3_asr'
 │   └── default_models/
 │       ├── whisper_models.dart            # All 10 Whisper variants (FP32 HF)
 │       ├── sherpa_models.dart             # Zipformer EN (tar.bz2) + Parakeet TDT (HF)
-│       └── canary_models.dart             # Canary 180M (HF)
+│       ├── canary_models.dart             # Canary 180M (HF)
+│       ├── sensevoice_models.dart         # SenseVoice Small INT8 (HF)
+│       ├── omnilingual_models.dart        # Omnilingual 300M + 1B (HF)
+│       ├── qwen_models.dart               # Qwen3-ASR 0.6B INT8 (HF)
+│       └── register_defaults.dart         # Registers all model families on first access
 test/
 ├── stt_flutter_test.dart
+├── new_models_test.dart                   # Registration + factory dispatch + SenseVoice parsing
+├── preprocess_config_test.dart            # PreprocessConfig.isNoOp + hasDenoiser
+├── audio_chunker_test.dart                # chunkBuffer + dedupJoinedText
 ├── model_registry_test.dart
 ├── audio_processor_test.dart
 ├── audio_capture_test.dart
-├── engine_factory_test.dart
+├── engine_factory_test.dart               # Expects 7 engine types
 ├── language_handling_test.dart
 ├── model_downloader_test.dart
 └── fixtures/
     └── hello_en.wav
 example/
 ├── pubspec.yaml
+├── assets/
+│   ├── hello_en.wav
+│   └── denoisers/
+│       ├── gtcrn/model.onnx               # GTCRN denoiser (535 KB)
+│       └── dpdfnet/model.onnx             # DPDFNet denoiser (10 MB)
 ├── lib/
 │   ├── main.dart
+│   ├── utils/
+│   │   ├── audio_diagnostics.dart         # Linux audio probe
+│   │   └── denoiser_bundle.dart           # Asset extraction for bundled denoisers
 │   └── screens/
-│       ├── model_selection_screen.dart
-│       └── transcription_screen.dart
+│       ├── model_selection_screen.dart    # 7 engine type icons
+│       └── transcription_screen.dart      # Hotwords, denoiser UI, emotion chips
+└── test/
+    ├── audio_diagnostics_test.dart
+    ├── denoiser_bundle_test.dart          # DenoiserBundle.dirFor unit tests
+    └── widget_test.dart
 ```
 
 ---
@@ -447,11 +588,13 @@ dev_dependencies:
 | 3 | Model downloader | `model_downloader.dart` | Unit test with mock HTTP |
 | 4 | Audio processing | `audio_buffer.dart`, `audio_processor.dart` | Unit test with known WAV files |
 | 5 | Engine scaffolding | `offline_engine_base.dart`, `engine_factory.dart` | `flutter test` (engine_factory_test) |
-| 6 | All four engines | `whisper/`, `sherpa/`, `canary/`, `nemo/` engines | `flutter test` (engine_factory_test) |
+| 6 | All seven engines | `whisper/`, `sherpa/`, `canary/`, `nemo/`, `sensevoice/`, `omnilingual/`, `qwen3asr/` | `flutter test` (engine_factory_test) |
 | 7 | SttFlutter plumbing | `stt_flutter_impl.dart` (language mode + LanguageDetector fallback) | `flutter test` (language_handling_test) |
-| 8 | Singleton SttEngine | `stt/stt_engine.dart` (defaultLanguage + Object return) | `flutter test` (stt_flutter_test) |
+| 8 | Singleton SttEngine | `stt/stt_engine.dart` (defaultLanguage + Object return + setHotwords) | `flutter test` (stt_flutter_test) |
 | 9 | Streaming + VAD | `audio/audio_capture.dart`, `audio/vad.dart` | Real-time recording test |
-| 10 | Example app | `main.dart`, `model_selection_screen.dart`, `transcription_screen.dart` | `flutter run` on device |
+| 10 | Audio chunking | `audio/audio_chunker.dart` (ChunkingConfig, chunkBuffer, dedupJoinedText) | `flutter test` (audio_chunker_test) |
+| 11 | Preprocessing | `audio_processor.dart` (denoiser, high-pass, gain, normalize, PreprocessConfig) | `flutter test` (preprocess_config_test) |
+| 12 | Example app | `main.dart`, `model_selection_screen.dart`, `transcription_screen.dart`, `denoiser_bundle.dart` | `flutter run` on device |
 
 ---
 
@@ -460,9 +603,15 @@ dev_dependencies:
 | Test | Type | Verifies |
 |------|------|----------|
 | `audio_processor_test.dart` | Unit | WAV parsing (8/16/24/32-bit, IEEE float, multi-channel), resample to 16kHz |
+| `audio_chunker_test.dart` | Unit | chunkBuffer (window/overlap), dedupJoinedText (boundary dedup) |
+| `preprocess_config_test.dart` | Unit | PreprocessConfig.isNoOp, hasDenoiser |
 | `audio_capture_test.dart` | Unit | PCM16 → Float32 conversion, range, edge cases |
 | `model_registry_test.dart` | Unit | Register, lookup, available, duplicates |
-| `engine_factory_test.dart` | Unit | Each model type returns the correct engine with the right `supportsExplicitLanguage` / `supportedLanguages` |
+| `engine_factory_test.dart` | Unit | Each of 7 model types returns the correct engine with the right `supportsExplicitLanguage` / `supportedLanguages` |
 | `language_handling_test.dart` | Unit | Per-call override wins over default; auto-detect path; `SttResult.lang` is preserved |
-| `model_downloader_test.dart` | Unit | Mock HTTP: SHA256 success, SHA256 mismatch deletes file, 404 throws, user-supplied client is not auto-closed |
-| `stt_flutter_test.dart` | Unit | Registry, model descriptor validation |
+| `model_downloader_test.dart` | Unit | Mock HTTP: SHA256 success, SHA256 mismatch deletes file, 404 throws, size verification, truncated file re-download |
+| `new_models_test.dart` | Unit | Registration of 3 new models, factory dispatch, SenseVoice tag parsing |
+| `stt_flutter_test.dart` | Unit | Registry, model descriptor validation, Qwen3 tokenizer/ prefix |
+| `example/test/audio_diagnostics_test.dart` | Unit | Linux audio diagnostics output format |
+| `example/test/denoiser_bundle_test.dart` | Unit | DenoiserBundle.dirFor path resolution |
+| `example/test/widget_test.dart` | Widget | App boots and shows model selection screen |

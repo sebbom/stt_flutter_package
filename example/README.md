@@ -6,7 +6,7 @@ Supports **Android, iOS, Linux** (and macOS, Windows, Web with the same Dart cod
 
 ## Usage
 
-1. Launch the app → model selection screen (models grouped by engine type)
+1. Launch the app → model selection screen (models grouped by engine type: Whisper, Zipformer, Parakeet, Canary, SenseVoice, Omnilingual, Qwen3)
 2. Download a model (or use one already downloaded on the device)
 3. Tap a downloaded card to open the transcription screen
 4. Pick a language mode:
@@ -19,11 +19,20 @@ Supports **Android, iOS, Linux** (and macOS, Windows, Web with the same Dart cod
    - **Pick file** — any local audio file (WAV / MP3 / M4A / FLAC / OGG / Opus)
    - **Mic** — live recording with VAD; tap Mic again (now red) to stop
 7. Result card shows `text`, `lang`, `conf`, `audio`, `infer`, `mode` chips; full history is kept below
+8. Preprocessing card: gain, normalize (peak/RMS), high-pass filter, **denoiser** (GTCRN or DPDFNet — bundled, no download needed), and a live mic noise suppression hook
+9. For Zipformer/Qwen3 models: **hotwords** card to boost accuracy for specific words
 
 ## Models
 
 All models are downloaded at runtime from HuggingFace / GitHub on first use.
 No bundled (embedded) model files are included in the example app.
+
+The preprocessing card offers two **bundled denoiser models** (GTCRN and DPDFNet) — these are
+extracted to a temp directory on first use and do not require a download. They apply neural
+speech enhancement before transcription.
+
+Supported engine types: Whisper, Sherpa (Zipformer), NeMo (Parakeet), Canary, SenseVoice,
+Omnilingual ASR, and Qwen3-ASR.
 
 ## Build
 

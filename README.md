@@ -11,15 +11,18 @@ Supports four model families — all ONNX, all via `sherpa_onnx`.
 
 - **Local only** — no network calls during transcription
 - **Multi-language** — every language supported by the loaded model is available
-  (99+ via Whisper, 25 via Parakeet, en/es/de/fr via Canary, en via Zipformer)
-- **4 model families** — Whisper, Sherpa-ONNX (Zipformer transducer), NeMo Parakeet, Canary
+  (99+ via Whisper, 25 via Parakeet, en/es/de/fr via Canary, en via Zipformer,
+  zh/en/ja/ko/yue via SenseVoice, 1600 via Omnilingual, multilingual via Qwen3)
+- **7 model families** — Whisper, Sherpa-ONNX (Zipformer), NeMo Parakeet, Canary, SenseVoice, Omnilingual ASR, Qwen3-ASR
 - **Three language modes** — auto-detect, default from `loadModel`, forced per-call
 - **Language detection** — detected language returned in `SttResult.lang` (Whisper, Canary, Parakeet, plus a Whisper-tiny SLI fallback)
-- **Long-form audio** — Whisper chunks audio at 30 s with overlap and dedup
+- **Long-form audio** — all engines chunk audio at 30 s with overlap and dedup
+- **Audio preprocessing** — denoiser (GTCRN/DPDFNet), high-pass, gain, normalize
 - **Runtime download** — models downloaded and cached on first use
 - **Extensible registry** — add any ONNX model in one line of code
 - **Native ONNX Runtime** — via `sherpa_onnx` (no `flutter_onnxruntime`)
 - **Silero VAD support** — optional `SherpaOnnxVadEngine` wrapper for speech/noise gating
+- **Hotwords** — boost accuracy for specific words (Zipformer file-based, Qwen3 comma-separated)
 
 ---
 
@@ -80,6 +83,9 @@ print(r3.lang); // "fr" (or whatever the engine actually detected)
 | Sherpa (zipformer) | ❌ (English only) | `en` |
 | Nemo (Parakeet) | ✅ | from `ModelDescriptor.languages` (25) |
 | Canary | ✅ | from `ModelDescriptor.languages` (en, es, de, fr) |
+| SenseVoice | ✅ | from `ModelDescriptor.languages` (zh, en, ja, ko, yue) |
+| Omnilingual | ✅ | from `ModelDescriptor.languages` (1600) |
+| Qwen3-ASR | ✅ | from `ModelDescriptor.languages` (multilingual) |
 
 When a forced language is **not in** the model's supported list, the engine
 logs a warning and continues — useful for catching bugs without breaking the
@@ -105,6 +111,10 @@ transcription in production. For models that don't support explicit language
 | `sherpa-zipformer-en` | Sherpa | en | ~300 MB |
 | `parakeet-tdt-0.6b-multilingual` | NeMo Parakeet | 25 langs | ~400 MB |
 | `canary-180m-en-es-de-fr` | Canary | en, es, de, fr | ~200 MB |
+| `sensevoice-small` | SenseVoice | zh, en, ja, ko, yue | ~250 MB |
+| `omnilingual-300m-ctc-v2` | Omnilingual | 1600 langs | ~1.3 GB |
+| `omnilingual-1b-ctc` | Omnilingual | 1600 langs | ~3.9 GB |
+| `qwen3-asr-0.6b` | Qwen3-ASR | multilingual | ~1 GB |
 
 Add your own model:
 
@@ -123,6 +133,59 @@ ModelRegistry.register(ModelDescriptor(
 
 ---
 
+## Audio preprocessing
+
+All preprocessing is optional and controlled via `PreprocessConfig`. When none is
+set (`PreprocessConfig.none`), audio is passed to the engine as-is.
+
+### Pipeline order
+
+Denoiser runs first to remove noise before gain/normalize amplify it:
+
+```
+raw audio → denoise → high-pass → gain → normalize → engine
+```
+
+### Available options
+
+| Option | What it does | Default |
+|--------|-------------|---------|
+| **Denoiser** (GTCRN / DPDFNet) | Neural speech enhancement via sherpa-onnx `OfflineSpeechDenoiser`. Removes background noise, fan hum, keyboard clatter. GTCRN is lighter (535 KB); DPDFNet is heavier (10 MB) but higher quality. | Off |
+| **High-pass filter** | First-order IIR RC filter at 80 Hz cutoff. Removes DC offset and low-frequency rumble (HVAC, mic handling). | Off |
+| **Gain** | Multiplies every sample by a factor (e.g. `1.5`). Useful for quiet recordings. Clamps to [-1, 1] to prevent clipping. | 1.0 (no change) |
+| **Normalize — Peak** | Scales audio so `max|sample|` equals 0.95. Preserves dynamics while preventing clipping. No-op on silent or already-loud audio. | Off |
+| **Normalize — RMS** | Scales audio so the root-mean-square equals 0.1. Loudness-normalized output for consistent volume across recordings. Clamps to [-1, 1]. | Off |
+| **Noise suppression flag** | Surfaces a `noiseSuppression` boolean for platform plugins (e.g. `noise_suppression`). The library only stores the flag; actual suppression is applied by your platform code. | Off |
+
+### Quick-start example
+
+```dart
+import 'package:stt_flutter/stt_flutter.dart';
+
+final result = await SttEngine.instance.transcribeFile(
+  path,
+  preprocess: PreprocessConfig(
+    denoiserType: DenoiserType.gtcrn,
+    denoiserModelDir: '/path/to/gtcrn/', // or use DenoiserBundle in the example app
+    highPass: true,
+    gain: 1.3,
+    normalize: NormalizeMode.peak,
+    noiseSuppression: true,
+  ),
+);
+```
+
+### Hotwords
+
+Boost recognition accuracy for domain-specific words:
+
+| Engine | Mechanism | How to set |
+|--------|-----------|-----------|
+| **Zipformer** | `hotwordsFile` (one word per line) + `hotwordsScore` (boost factor, e.g. `1.5`) | `SttEngine.setHotwords(text)` writes to `<modelDir>/hotwords.txt` and reloads |
+| **Qwen3-ASR** | `hotwords` (comma-separated string) | `loadModel(hotwords: 'hello,world')` or per-call via `PreprocessConfig` |
+
+---
+
 ## Architecture
 
 ```
@@ -132,9 +195,13 @@ Main isolate
          ├─ WhisperInferenceEngine   (OfflineRecognizer, modelType: 'whisper')
          ├─ SherpaInferenceEngine    (OfflineRecognizer, modelType: 'zipformer2')
          ├─ NemoInferenceEngine      (OfflineRecognizer, modelType: 'nemo_transducer')
-         └─ CanaryInferenceEngine    (OfflineRecognizer, modelType: 'canary')
+         ├─ CanaryInferenceEngine    (OfflineRecognizer, modelType: 'canary')
+         ├─ SenseVoiceInferenceEngine(OfflineRecognizer, modelType: 'sense_voice')
+         ├─ OmnilingualInferenceEngine(OfflineRecognizer, modelType: 'omnilingual_asr_ctc')
+         └─ Qwen3AsrInferenceEngine  (OfflineRecognizer, modelType: 'qwen3_asr')
 
   AudioCaptureService → Float32List stream → VAD → SttEngine.transcribeBuffer
+  AudioProcessor → denoiser (GTCRN/DPDFNet) → high-pass → gain → normalize
   LanguageDetector (optional, sherpa_onnx SpokenLanguageIdentification) →
     used as fallback when the engine doesn't return a lang
 ```
