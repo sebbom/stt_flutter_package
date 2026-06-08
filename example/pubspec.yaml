@@ -1,7 +1,7 @@
 name: stt_flutter_example
-description: Example app for stt_flutter package.
+description: Example app for stt_flutter package — streaming VAD, model switching.
 publish_to: none
-version: 0.1.0
+version: 0.3.0
 
 environment:
   sdk: ^3.0.0
@@ -11,9 +11,9 @@ dependencies:
     sdk: flutter
   stt_flutter:
     path: ../
-  flutter_sound: ^9.30.0
   permission_handler: ^11.0.0
   path_provider: ^2.1.0
+  file_picker: ^10.3.3
 
 dev_dependencies:
   flutter_test:
@@ -24,3 +24,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/hello_en.wav
+    - assets/denoisers/gtcrn/model.onnx
+    - assets/denoisers/dpdfnet/model.onnx

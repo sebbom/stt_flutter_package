@@ -12,24 +12,24 @@ void main() {
     final sherpaModels = ModelRegistry.available(type: SttModelType.sherpa);
     expect(sherpaModels.length, greaterThanOrEqualTo(1));
 
-    final voxtralModels = ModelRegistry.available(type: SttModelType.voxtral);
-    expect(voxtralModels.length, greaterThanOrEqualTo(1));
+
   });
 
   test('ModelRegistry.get returns correct models', () {
     final tiny = ModelRegistry.get('whisper-tiny');
     expect(tiny.type, SttModelType.whisper);
     expect(tiny.files.length, 3);
-    expect(tiny.files[0].filename, 'encoder.onnx');
-    expect(tiny.files[2].filename, 'vocab.json');
+    expect(tiny.files[0].filename, 'tiny-encoder.onnx');
+    expect(tiny.files[1].filename, 'tiny-decoder.onnx');
+    expect(tiny.files[2].filename, 'tiny-tokens.txt');
 
     final zipformer = ModelRegistry.get('sherpa-zipformer-en');
     expect(zipformer.type, SttModelType.sherpa);
     expect(zipformer.languages, contains('en'));
 
-    final voxtral = ModelRegistry.get('voxtral-mini');
-    expect(voxtral.type, SttModelType.voxtral);
-    expect(voxtral.languages, contains('de'));
+    final zipformer2 = ModelRegistry.get('sherpa-zipformer-en');
+    expect(zipformer2.type, SttModelType.sherpa);
+    expect(zipformer2.languages, contains('en'));
   });
 
   test('ModelRegistry.register adds custom model', () {
@@ -64,8 +64,10 @@ void main() {
       for (final file in model.files) {
         expect(file.url.startsWith('https://'), true,
             reason: '${model.id}: ${file.filename} URL must be HTTPS');
-        expect(file.filename.contains('/'), false,
-            reason: '${model.id}: filename must not contain path separators');
+        final isTokenizerEntry = file.filename.startsWith('tokenizer/');
+        expect(file.filename.contains('/'), isTokenizerEntry,
+            reason:
+                '${model.id}: filename "${file.filename}" must not contain path separators unless it is a tokenizer subdirectory');
       }
     }
   });

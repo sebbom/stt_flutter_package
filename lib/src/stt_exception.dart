@@ -31,6 +31,9 @@ class SttException implements Exception {
 
   factory SttException.downloadFailed(String reason) =>
       SttException('Download failed: $reason', 5001);
+
+  factory SttException.unsupportedLanguage(String language, String modelId) =>
+      SttException('Language "$language" is not supported by model "$modelId"', 6001);
 }
 
 class OperationCancelledException implements Exception {
