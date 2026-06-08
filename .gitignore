@@ -1,2 +1,24 @@
+# See https://github.com/github/gitignore/blob/main/Flutter.gitignore
+
+# Flutter/Dart build outputs
 build/
 .dart_tool/
+
+# Package lockfile (should NOT be committed for packages)
+pubspec.lock
+
+# Flutter plugin dependencies
+.flutter-plugins-dependencies
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Development artifacts
+docs/internal/
+
+# OS files
+.DS_Store
+Thumbs.db

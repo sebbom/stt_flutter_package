@@ -18,9 +18,7 @@ export 'src/engines/nemo/nemo_engine.dart'
     show NemoInferenceEngine;
 export 'src/engines/canary/canary_engine.dart'
     show CanaryInferenceEngine;
-export 'src/device_utils.dart';
 export 'src/stt/stt_engine.dart';
-export 'src/audio/audio_capture.dart';
 export 'src/audio/vad.dart';
 export 'src/language/language_detector.dart'
     show LanguageDetector;

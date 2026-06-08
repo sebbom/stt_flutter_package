@@ -122,8 +122,9 @@ class Qwen3AsrInferenceEngine extends OfflineEngineBase {
     if (language != null && language.isNotEmpty) return language;
     SttLogger.w(
       'Qwen3-ASR received no language hint — falling back to "$_fallbackLanguage". '
+      'Note: Qwen3-ASR does not support auto-detection. '
       'Use SttEngine.setDefaultLanguage() or pass language: "..." to override. '
-      'Without a language, the model defaults to Chinese output.',
+      'Without a language hint, the model may default to Chinese output.',
     );
     return _fallbackLanguage;
   }

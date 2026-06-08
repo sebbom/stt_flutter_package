@@ -9,6 +9,18 @@ import '../model_downloader.dart';
 import '../stt_logger.dart';
 import '../audio/audio_processor.dart';
 
+/// Singleton wrapper for [SttFlutter] that provides a convenient global access point
+/// for speech-to-text functionality.
+///
+/// This class is a singleton, so use [SttEngine.instance] to access it.
+///
+/// Example usage:
+/// ```dart
+/// await SttEngine.instance.loadModel(ModelRegistry.get('whisper-tiny'));
+/// final result = await SttEngine.instance.transcribeFile('/path/to/audio.wav');
+/// print(result.text);
+/// await SttEngine.instance.destroy();
+/// ```
 class SttEngine {
   static const String _hotwordsFilename = 'hotwords.txt';
   static const String _hotwordsTmpFilename = 'hotwords.txt.tmp';
@@ -25,9 +37,16 @@ class SttEngine {
 
   static final SttEngine instance = SttEngine._();
 
+  /// Whether the engine is ready to perform transcription.
   bool get isReady => _stt != null && !_cancelRequested;
+
+  /// The currently loaded model, or null if no model is loaded.
   ModelDescriptor? get currentModel => _model;
+
+  /// The current default language for transcription, or null if using auto-detection.
   String? get currentDefaultLanguage => _defaultLanguage;
+
+  /// The directory containing the currently loaded model files.
   String? get currentModelDir => _modelDir;
 
   /// Load [model] into the engine. If [defaultLanguage] is provided, it is

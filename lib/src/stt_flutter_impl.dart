@@ -15,6 +15,19 @@ import 'engines/inference_engine.dart';
 import 'engines/engine_factory.dart';
 import 'language/language_detector.dart';
 
+/// Main entry point for speech-to-text functionality.
+///
+/// This class provides the core API for initializing the STT engine,
+/// transcribing audio files or buffers, and managing resources.
+///
+/// Example usage:
+/// ```dart
+/// final stt = SttFlutter();
+/// await stt.initialize(model: ModelRegistry.get('whisper-tiny'));
+/// final result = await stt.transcribeFile('/path/to/audio.wav');
+/// print(result.text);
+/// await stt.dispose();
+/// ```
 class SttFlutter {
   InferenceEngine? _engine;
   ModelDescriptor? _model;
@@ -50,6 +63,15 @@ class SttFlutter {
     _detectorDecoderPath = 'fake-decoder.onnx';
   }
 
+  /// Initializes the STT engine with the specified model.
+  ///
+  /// [model]: The model descriptor to load (e.g., from [ModelRegistry.get])
+  /// [modelDir]: Optional directory containing pre-downloaded model files.
+  ///            If not provided, uses the default cache directory.
+  /// [language]: Optional default language for transcription (ISO 639-1 code).
+  ///            If not provided, the engine will use auto-detection where supported.
+  ///
+  /// Throws [SttException] if initialization fails or if already initialized.
   Future<void> initialize({
     required ModelDescriptor model,
     String? modelDir,
@@ -106,6 +128,18 @@ class SttFlutter {
     }
   }
 
+  /// Transcribes an audio file to text.
+  ///
+  /// [path]: Path to the audio file (WAV format recommended)
+  /// [language]: Optional language override for this transcription (ISO 639-1 code).
+  ///            If not provided, uses the default language set during initialization.
+  /// [token]: Optional cancellation token to abort the transcription
+  /// [preprocess]: Optional audio preprocessing configuration
+  ///
+  /// Returns: [SttResult] containing the transcribed text, detected language,
+  ///          confidence score, and timing information
+  ///
+  /// Throws [SttException] if not initialized or if the file doesn't exist
   Future<SttResult> transcribeFile(
     String path, {
     String? language,
@@ -122,6 +156,19 @@ class SttFlutter {
     return _transcribe(audio, language: language, token: token);
   }
 
+  /// Transcribes raw audio samples to text.
+  ///
+  /// [samples]: Raw PCM audio samples as Float32 values in range [-1.0, 1.0]
+  /// [sampleRate]: Sample rate of the audio in Hz (will be resampled to 16kHz internally)
+  /// [language]: Optional language override for this transcription (ISO 639-1 code).
+  ///            If not provided, uses the default language set during initialization.
+  /// [token]: Optional cancellation token to abort the transcription
+  /// [preprocess]: Optional audio preprocessing configuration
+  ///
+  /// Returns: [SttResult] containing the transcribed text, detected language,
+  ///          confidence score, and timing information
+  ///
+  /// Throws [SttException] if not initialized or if parameters are invalid
   Future<SttResult> transcribeBuffer(
     Float32List samples,
     int sampleRate, {
@@ -245,6 +292,7 @@ class SttFlutter {
     _detectorDecoderPath = decoderPath;
   }
 
+  /// Cancels any ongoing transcription.
   void cancel() {
     _currentToken?.cancel();
   }
@@ -256,6 +304,10 @@ class SttFlutter {
     _initialized = false;
   }
 
+  /// Releases all resources held by the STT engine.
+  ///
+  /// Call this when you're done using the engine to free native resources.
+  /// After calling dispose(), the engine cannot be used again until re-initialized.
   Future<void> dispose() async {
     cancel();
     if (!_initialized) return;

@@ -5,12 +5,40 @@ import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import '../stt_flutter.dart';
 
+/// Handles downloading and caching of model files.
+///
+/// Models are downloaded from their remote URLs (typically HuggingFace or GitHub),
+/// verified with SHA256 checksums, and cached locally for offline use.
+/// Tar.bz2 archives (used by Sherpa models) are automatically extracted.
+///
+/// Example:
+/// ```dart
+/// final model = ModelRegistry.get('whisper-tiny');
+/// await ModelDownloader.download(model, onProgress: (received, total) {
+///   print('Downloaded $received of $total bytes');
+/// });
+/// ```
 class ModelDownloader {
+  /// Returns the default storage path for a model.
+  ///
+  /// Models are stored in `{appDocumentsDirectory}/stt_models/{model.id}/`
   static Future<String> defaultStoragePath(ModelDescriptor model) async {
     final dir = await getApplicationDocumentsDirectory();
     return '${dir.path}/stt_models/${model.id}';
   }
 
+  /// Downloads all files for a model and caches them locally.
+  ///
+  /// [model]: The model descriptor containing the files to download
+  /// [storagePath]: Optional custom storage directory. Defaults to [defaultStoragePath]
+  /// [client]: Optional HTTP client for testing. If not provided, a new client is created
+  /// [onProgress]: Callback for overall download progress (bytes received, total bytes)
+  /// [onFileProgress]: Callback for per-file download progress (filename, bytes received, total bytes)
+  ///
+  /// Files are verified with SHA256 checksums if provided in the model descriptor.
+  /// Tar.bz2 archives are automatically extracted after download.
+  ///
+  /// Throws [SttException] if download fails or checksum verification fails
   static Future<void> download(
     ModelDescriptor model, {
     String? storagePath,
@@ -49,6 +77,13 @@ class ModelDownloader {
     }
   }
 
+  /// Checks if all files for a model are already downloaded and cached.
+  ///
+  /// [model]: The model descriptor to check
+  /// [storagePath]: Optional custom storage directory. Defaults to [defaultStoragePath]
+  ///
+  /// Returns true if all files exist and have the correct size (if specified in the descriptor).
+  /// Files with mismatched sizes are deleted to force a re-download.
   static Future<bool> isDownloaded(
     ModelDescriptor model, {
     String? storagePath,
