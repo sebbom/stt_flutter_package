@@ -114,13 +114,13 @@ class _TranscriptionScreenState extends State<TranscriptionScreen> {
 
   Future<String?> _sliModelPath(String filename) async {
     final dir = await ModelDownloader.defaultStoragePath(
-      ModelDescriptor(
+      const ModelDescriptor(
         id: 'whisper-tiny',
         name: 'Whisper Tiny',
         type: SttModelType.whisper,
-        languages: const ['en'],
+        languages: ['en'],
         sizeMb: 0,
-        files: const [],
+        files: [],
       ),
     );
     final path = '$dir/$filename';
@@ -1403,8 +1403,8 @@ class _LangPickerDialogState extends State<_LangPickerDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              RadioListTile<String?>(
-                title: const Text('(none — auto-detect)'),
+              const RadioListTile<String?>(
+                title: Text('(none — auto-detect)'),
                 value: '',
                 contentPadding: EdgeInsets.zero,
                 dense: true,
