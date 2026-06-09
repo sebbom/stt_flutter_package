@@ -4,7 +4,7 @@ version: 0.2.0
 repository: https://github.com/sebbom/stt_flutter_package
 
 environment:
-  sdk: ^3.5.0
+  sdk: ^3.4.4
   flutter: ">=3.7.0"
 
 dependencies:
