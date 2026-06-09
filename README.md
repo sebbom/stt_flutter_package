@@ -23,6 +23,14 @@ Supports four model families — all ONNX, all via `sherpa_onnx`.
 - **Native ONNX Runtime** — via `sherpa_onnx` (no `flutter_onnxruntime`)
 - **Silero VAD support** — optional `SherpaOnnxVadEngine` wrapper for speech/noise gating
 - **Hotwords** — boost accuracy for specific words (Zipformer file-based, Qwen3 comma-separated)
+---
+
+## Todo
+
+
+- [ ] Auto-detect language to be done
+- [ ] With language detection we could have specific models triggered (language specific)
+- [ ] Post processing: recognition of sentence and autocorrection
 
 ---
 
