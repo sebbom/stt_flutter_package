@@ -1,5 +1,3 @@
-import 'package:stt_flutter/src/device_utils.dart';
-
 enum SttModelType {
   whisper,
   sherpa,
@@ -32,13 +30,4 @@ class SttConfig {
     this.languageCacheDuration = const Duration(minutes: 5),
     this.maxLoadedModels = 2,
   });
-
-  static SttConfig fromDeviceCapabilities(DeviceCapabilities capabilities) {
-    return SttConfig(
-      numThreads: capabilities.cpuCores,
-      useParakeetForHighEnd: capabilities.isHighEnd && capabilities.memoryMB >= 6000,
-      maxModelSizeMB: capabilities.memoryMB > 4000 ? 640 : 200,
-      maxLoadedModels: capabilities.memoryMB > 4000 ? 3 : 1,
-    );
-  }
 }

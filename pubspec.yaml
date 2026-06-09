@@ -1,11 +1,11 @@
 name: stt_flutter
-description: Fully local, on-device speech-to-text using sherpa_onnx native ONNX Runtime (Whisper, Sherpa, Kroko, Parakeet).
+description: Fully local, on-device speech-to-text for Flutter. Supports Whisper, NeMo Parakeet, Canary, SenseVoice, Qwen3-ASR, Omnilingual, and Sherpa-ONNX via sherpa_onnx native FFI.
 version: 0.2.0
 repository: https://github.com/sebbom/stt_flutter_package
 
 environment:
-  sdk: ^3.0.0
-  flutter: '>=3.7.0'
+  sdk: ^3.4.4
+  flutter: ">=3.7.0"
 
 dependencies:
   flutter:
@@ -16,11 +16,9 @@ dependencies:
   file: ^7.0.0
   crypto: ^3.0.0
   path: ^1.9.0
-  record: ^7.0.0
-  device_info_plus: ^11.0.0
   sherpa_onnx: ^1.13.2
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^5.0.0
+  flutter_lints: ^4.0.0

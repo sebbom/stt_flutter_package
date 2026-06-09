@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:record/record.dart';
-import 'package:stt_flutter/src/stt_logger.dart';
+import 'package:stt_flutter/stt_flutter.dart';
 
 class AudioCaptureService {
   final AudioRecorder _recorder = AudioRecorder();
@@ -12,7 +12,6 @@ class AudioCaptureService {
   static const int sampleRate = 16000;
   static const int numChannels = 1;
 
-  /// Stream of mono 16 kHz Float32 audio chunks.
   Stream<Float32List> get audioStream =>
       _chunkController?.stream ?? const Stream.empty();
 
@@ -70,8 +69,6 @@ class AudioCaptureService {
     await _recorder.dispose();
   }
 
-  /// Convert raw PCM 16-bit little-endian bytes to a normalized Float32List.
-  /// Visible for testing.
   static Float32List bytesToFloat32(Uint8List bytes) {
     final n = bytes.length ~/ 2;
     final out = Float32List(n);

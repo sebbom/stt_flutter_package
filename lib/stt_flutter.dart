@@ -3,12 +3,12 @@ export 'src/stt_result.dart';
 export 'src/stt_exception.dart';
 export 'src/stt_logger.dart';
 export 'src/cancellation_token.dart';
-export 'src/compute_worker.dart';
 export 'src/stt_flutter_impl.dart';
 export 'src/model_registry.dart';
 export 'src/model_downloader.dart';
 export 'src/audio/audio_buffer.dart';
 export 'src/audio/audio_processor.dart';
+export 'src/audio/audio_chunker.dart';
 export 'src/engines/inference_engine.dart';
 export 'src/engines/whisper/whisper_engine.dart'
     show WhisperInferenceEngine;
@@ -18,9 +18,7 @@ export 'src/engines/nemo/nemo_engine.dart'
     show NemoInferenceEngine;
 export 'src/engines/canary/canary_engine.dart'
     show CanaryInferenceEngine;
-export 'src/device_utils.dart';
 export 'src/stt/stt_engine.dart';
-export 'src/audio/audio_capture.dart';
 export 'src/audio/vad.dart';
 export 'src/language/language_detector.dart'
     show LanguageDetector;

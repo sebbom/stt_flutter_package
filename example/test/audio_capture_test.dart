@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:stt_flutter/stt_flutter.dart';
+import 'package:stt_flutter_example/src/audio/audio_capture.dart';
 
 void main() {
   group('AudioCaptureService.bytesToFloat32', () {

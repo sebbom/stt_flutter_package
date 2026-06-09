@@ -160,8 +160,8 @@ void main() {
     });
 
     test('highPass passes through high-frequency content', () {
-      final sr = 16000;
-      final n = sr;
+      const sr = 16000;
+      const n = sr;
       final samples = Float32List(n);
       for (var i = 0; i < n; i++) {
         samples[i] = math.sin(2 * math.pi * 1000 * i / sr);
@@ -173,8 +173,8 @@ void main() {
     });
 
     test('highPass attenuates low-frequency content', () {
-      final sr = 16000;
-      final n = sr;
+      const sr = 16000;
+      const n = sr;
       final samples = Float32List(n);
       for (var i = 0; i < n; i++) {
         samples[i] = math.sin(2 * math.pi * 30 * i / sr);
@@ -195,7 +195,7 @@ void main() {
         ),
         sampleRate: 16000,
       );
-      final cfg = const PreprocessConfig(
+      const cfg = PreprocessConfig(
         gain: 2.0,
         normalize: NormalizeMode.peak,
         highPass: true,

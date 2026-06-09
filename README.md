@@ -23,6 +23,14 @@ Supports four model families — all ONNX, all via `sherpa_onnx`.
 - **Native ONNX Runtime** — via `sherpa_onnx` (no `flutter_onnxruntime`)
 - **Silero VAD support** — optional `SherpaOnnxVadEngine` wrapper for speech/noise gating
 - **Hotwords** — boost accuracy for specific words (Zipformer file-based, Qwen3 comma-separated)
+---
+
+## Todo
+
+
+- [ ] Auto-detect language to be done
+- [ ] With language detection we could have specific models triggered (language specific)
+- [ ] Post processing: recognition of sentence and autocorrection
 
 ---
 
@@ -115,6 +123,20 @@ transcription in production. For models that don't support explicit language
 | `omnilingual-300m-ctc-v2` | Omnilingual | 1600 langs | ~1.3 GB |
 | `omnilingual-1b-ctc` | Omnilingual | 1600 langs | ~3.9 GB |
 | `qwen3-asr-0.6b` | Qwen3-ASR | multilingual | ~1 GB |
+
+### Choosing a Model
+
+| Use Case | Recommended Model | Size | Languages | Notes |
+|----------|------------------|------|-----------|-------|
+| Fast, English-only | `sherpa-zipformer-en` | 300 MB | en | Best for English-only, fast inference |
+| General multilingual | `whisper-tiny` | 150 MB | 99+ | Good balance of size and accuracy |
+| Better accuracy | `whisper-small` | 460 MB | 99+ | Higher quality than tiny |
+| Best accuracy | `whisper-medium` | 960 MB | 99+ | Best quality/size tradeoff |
+| High accuracy, fast | `whisper-large-v3-turbo` | 550 MB | 99+ | Optimized for speed |
+| European languages | `canary-180m-en-es-de-fr` | 200 MB | en, es, de, fr | Optimized for these 4 languages |
+| Asian languages | `sensevoice-small` | 250 MB | zh, en, ja, ko, yue | Optimized for Asian languages |
+| 1600+ languages | `omnilingual-300m-ctc-v2` | 1.3 GB | 1600 | Supports the most languages |
+| Multilingual, modern | `qwen3-asr-0.6b` | 1 GB | multilingual | State-of-the-art model |
 
 Add your own model:
 

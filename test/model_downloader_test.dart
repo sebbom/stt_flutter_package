@@ -38,7 +38,7 @@ void main() {
   group('ModelDownloader.downloadFile', () {
     test('writes the body to disk and verifies SHA256', () async {
       final body = utf8.encode('hello world');
-      final hash =
+      const hash =
           'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
       final client = _MockClient((req) async {
         return http.StreamedResponse(
