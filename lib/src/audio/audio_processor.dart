@@ -240,8 +240,9 @@ class AudioProcessor {
     return AudioBuffer(samples: out, sampleRate: buf.sampleRate);
   }
 
-  /// Resample to 16kHz mono. Lightweight enough to run on the main isolate,
-  /// but for big buffers callers should prefer [Isolate.run].
+  /// Resample to [targetRate] Hz mono using linear interpolation.
+  /// Lightweight enough to run on the main isolate, but for big buffers
+  /// callers should prefer [Isolate.run].
   static AudioBuffer resampleSync(
     AudioBuffer input, {
     int targetRate = targetSampleRate,
@@ -250,17 +251,15 @@ class AudioProcessor {
     final ratio = input.sampleRate / targetRate;
     final newLength = (input.length / ratio).round();
     final output = Float32List(newLength);
+    final lastIdx = input.length - 1;
 
     for (int i = 0; i < newLength; i++) {
       final srcPos = i * ratio;
       final srcIdx = srcPos.floor();
       final frac = srcPos - srcIdx;
-      if (srcIdx + 1 < input.length) {
-        output[i] =
-            input.samples[srcIdx] * (1 - frac) + input.samples[srcIdx + 1] * frac;
-      } else {
-        output[i] = input.samples[srcIdx];
-      }
+      final a = input.samples[srcIdx.clamp(0, lastIdx)];
+      final b = input.samples[(srcIdx + 1).clamp(0, lastIdx)];
+      output[i] = a * (1 - frac) + b * frac;
     }
     return AudioBuffer(samples: output, sampleRate: targetRate);
   }

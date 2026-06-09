@@ -2,17 +2,16 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'model_registry.dart';
-import 'model_downloader.dart';
 import 'stt_result.dart';
 import 'stt_exception.dart';
 import 'stt_logger.dart';
 import 'cancellation_token.dart';
-import 'compute_worker.dart';
+import 'model_registry.dart';
+import 'model_downloader.dart';
 import 'audio/audio_buffer.dart';
 import 'audio/audio_processor.dart';
-import 'engines/inference_engine.dart';
 import 'engines/engine_factory.dart';
+import 'engines/inference_engine.dart';
 import 'language/language_detector.dart';
 
 /// Main entry point for speech-to-text functionality.
@@ -81,8 +80,6 @@ class SttFlutter {
     if (model.id.isEmpty) throw SttException.invalidArgument('model.id must not be empty');
     _model = model;
     _defaultLanguage = (language != null && language.isNotEmpty) ? language : null;
-
-    await ComputeWorker.instance.initialize();
 
     final dir = modelDir ?? await ModelDownloader.defaultStoragePath(model);
     final modelFiles = <String, String>{};
@@ -198,13 +195,10 @@ class SttFlutter {
     _currentToken = token;
     token?.throwIfCancelled();
 
-    final AudioBuffer resampled;
-    if (audio.sampleRate == 16000) {
-      resampled = audio;
-    } else {
-      resampled = await ComputeWorker.instance.resample(audio);
+    // All engines expect 16kHz mono – resample before forwarding.
+    if (audio.sampleRate != AudioProcessor.targetSampleRate) {
+      audio = AudioProcessor.resampleSync(audio);
     }
-    token?.throwIfCancelled();
 
     String? effective = language ?? _defaultLanguage;
     String? detectedLang;
@@ -215,8 +209,8 @@ class SttFlutter {
     if (needAutoDetect && _detector != null) {
       try {
         final detected = await _detector!.detect(
-          resampled.samples,
-          sampleRate: 16000,
+          audio.samples,
+          sampleRate: audio.sampleRate,
           encoderPath: _detectorEncoderPath!,
           decoderPath: _detectorDecoderPath!,
         );
@@ -235,7 +229,7 @@ class SttFlutter {
     }
 
     final result = await _engine!.transcribe(
-      resampled,
+      audio,
       language: effective,
       token: token,
     );
@@ -246,8 +240,8 @@ class SttFlutter {
     } else if ((lang == null || lang.isEmpty) && _detector != null) {
       try {
         lang = await _detector!.detect(
-          resampled.samples,
-          sampleRate: 16000,
+          audio.samples,
+          sampleRate: audio.sampleRate,
           encoderPath: _detectorEncoderPath!,
           decoderPath: _detectorDecoderPath!,
         );
@@ -265,7 +259,7 @@ class SttFlutter {
       inferenceTimeMs: result.inferenceTimeMs,
       lang: lang,
       confidence: result.confidence,
-      durationMs: (resampled.samples.length / 16000) * 1000.0,
+      durationMs: (audio.samples.length / audio.sampleRate) * 1000.0,
     );
   }
 
@@ -317,6 +311,5 @@ class SttFlutter {
     _initialized = false;
     await _detector?.dispose();
     _detector = null;
-    await ComputeWorker.instance.dispose();
   }
 }

@@ -2,17 +2,13 @@ import 'package:sherpa_onnx/sherpa_onnx.dart';
 import '../../stt_result.dart';
 import '../../cancellation_token.dart';
 import '../../stt_logger.dart';
+import '../../stt_exception.dart';
 import '../../audio/audio_buffer.dart';
 import '../../audio/audio_chunker.dart';
 import '../offline_engine_base.dart';
 
 class Qwen3AsrInferenceEngine extends OfflineEngineBase {
   static const ChunkingConfig _chunking = ChunkingConfig.defaultForTransducer;
-  /// Qwen3-ASR defaults to Chinese output when no language hint is provided,
-  /// so we fall back to a sensible default from the model descriptor's
-  /// supported list. Callers can override via [SttEngine.setDefaultLanguage]
-  /// or the per-call `language` argument.
-  static const String _fallbackLanguage = 'en';
 
   Qwen3AsrInferenceEngine(super.model);
 
@@ -120,13 +116,11 @@ class Qwen3AsrInferenceEngine extends OfflineEngineBase {
 
   String _resolveLanguage(String? language) {
     if (language != null && language.isNotEmpty) return language;
-    SttLogger.w(
-      'Qwen3-ASR received no language hint — falling back to "$_fallbackLanguage". '
-      'Note: Qwen3-ASR does not support auto-detection. '
-      'Use SttEngine.setDefaultLanguage() or pass language: "..." to override. '
-      'Without a language hint, the model may default to Chinese output.',
+    throw SttException.invalidArgument(
+      'Qwen3-ASR requires an explicit language — it does not support auto-detection. '
+      'Use SttEngine.setDefaultLanguage() or pass language: "..." to transcribeFile(). '
+      'Without a language hint, the model defaults to Chinese output.',
     );
-    return _fallbackLanguage;
   }
 
   @override

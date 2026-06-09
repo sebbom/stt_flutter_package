@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stt_flutter/stt_flutter.dart';
 
@@ -56,7 +57,7 @@ void main() {
 
     test('SttException has message', () {
       final exception = SttException.modelLoadFailed('Test error');
-      expect(exception.message, 'Test error');
+      expect(exception.message, 'Failed to load model: Test error');
     });
 
     test('CancellationToken can be cancelled', () {
@@ -69,7 +70,7 @@ void main() {
     test('CancellationToken throws when cancelled', () {
       final token = CancellationToken();
       token.cancel();
-      expect(() => token.throwIfCancelled(), throwsA(isA<OperationCancelledError>()));
+      expect(() => token.throwIfCancelled(), throwsA(isA<OperationCancelledException>()));
     });
 
     test('AudioBuffer has correct duration', () {

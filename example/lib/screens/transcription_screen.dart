@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:stt_flutter/stt_flutter.dart';
 import '../utils/audio_diagnostics.dart';
 import '../utils/denoiser_bundle.dart';
+import '../src/audio/audio_capture.dart';
 
 enum LangMode { auto, modelDefault, force }
 

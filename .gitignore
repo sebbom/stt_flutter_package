@@ -5,7 +5,7 @@ build/
 .dart_tool/
 
 # Package lockfile (should NOT be committed for packages)
-pubspec.lock
+/pubspec.lock
 
 # Flutter plugin dependencies
 .flutter-plugins-dependencies

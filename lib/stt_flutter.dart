@@ -3,12 +3,12 @@ export 'src/stt_result.dart';
 export 'src/stt_exception.dart';
 export 'src/stt_logger.dart';
 export 'src/cancellation_token.dart';
-export 'src/compute_worker.dart';
 export 'src/stt_flutter_impl.dart';
 export 'src/model_registry.dart';
 export 'src/model_downloader.dart';
 export 'src/audio/audio_buffer.dart';
 export 'src/audio/audio_processor.dart';
+export 'src/audio/audio_chunker.dart';
 export 'src/engines/inference_engine.dart';
 export 'src/engines/whisper/whisper_engine.dart'
     show WhisperInferenceEngine;
