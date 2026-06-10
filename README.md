@@ -3,7 +3,9 @@
 Fully local, on-device speech-to-text for Flutter using `sherpa_onnx`.
 
 Runs inference on the **main isolate** (native `sherpa_onnx` FFI calls are non-blocking).
-Supports four model families — all ONNX, all via `sherpa_onnx`.
+Supports seven model families — all ONNX, all via `sherpa_onnx`.
+
+[![CI](https://github.com/sebbom/stt_flutter_package/actions/workflows/ci.yaml/badge.svg)](https://github.com/sebbom/stt_flutter_package/actions/workflows/ci.yaml)
 
 ---
 
@@ -17,6 +19,7 @@ Supports four model families — all ONNX, all via `sherpa_onnx`.
 - **Three language modes** — auto-detect, default from `loadModel`, forced per-call
 - **Language detection** — detected language returned in `SttResult.lang` (Whisper, Canary, Parakeet, plus a Whisper-tiny SLI fallback)
 - **Long-form audio** — all engines chunk audio at 30 s with overlap and dedup
+- **Beam search toggle** — `beamSearch: true` on `transcribeFile`/`transcribeBuffer` (Nemo falls back to greedy with warning)
 - **Audio preprocessing** — denoiser (GTCRN/DPDFNet), high-pass, gain, normalize
 - **Runtime download** — models downloaded and cached on first use
 - **Extensible registry** — add any ONNX model in one line of code
@@ -25,12 +28,11 @@ Supports four model families — all ONNX, all via `sherpa_onnx`.
 - **Hotwords** — boost accuracy for specific words (Zipformer file-based, Qwen3 comma-separated)
 ---
 
-## Todo
+## Requirements
 
-
-- [ ] Auto-detect language to be done
-- [ ] With language detection we could have specific models triggered (language specific)
-- [ ] Post processing: recognition of sentence and autocorrection
+- Flutter **3.44+** (Dart 3.12+) — recommended. Minimum: Flutter 3.7+ / Dart 3.4+
+- Android minSdk 24, iOS 14+
+- Linux: `clang`, `cmake`, `ninja-build`, `libgtk-3-dev`, `liblzma-dev`, `libpulse-dev`
 
 ---
 
@@ -236,11 +238,17 @@ See [PLAN.md](PLAN.md) for the full architecture document.
 
 ---
 
-## Requirements
+## Language auto-detect
 
-- Flutter 3.7+
-- Dart 3.0+
-- Android minSdk 24, iOS 14+
+The library has three language modes passed through `transcribeFile` / `transcribeBuffer`:
+
+| Mode | How |
+|---|---|
+| **Auto** | Pass `language: null` (or omit). Whisper auto-detects; other engines use their native tokenizer. |
+| **Default** | Set on `SttEngine.loadModel(defaultLanguage: 'de')`. Used when no per-call override. |
+| **Forced** | Pass `language: 'fr'` at call-site. Always wins over default. |
+
+`SttResult.lang` reports what the engine actually produced. An optional `LanguageDetector` fallback (Whisper-tiny SLI) populates `lang` when the engine returns empty.
 
 ---
 

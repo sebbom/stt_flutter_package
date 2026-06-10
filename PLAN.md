@@ -183,6 +183,7 @@ abstract class InferenceEngine {
     AudioBuffer audio, {
     String? language,
     CancellationToken? token,
+    Map<String, dynamic>? options,  // engine-specific flags (e.g. {'beamSearch': true})
   });
 
   /// Release all native resources (recognizer, streams).
@@ -439,7 +440,7 @@ class SttFlutter {
   });
 
   /// Transcribe a WAV file at [path].
-  Future<SttResult> transcribeFile(String path, {String? language, CancellationToken? token});
+  Future<SttResult> transcribeFile(String path, {String? language, CancellationToken? token, bool beamSearch = false, PreprocessConfig preprocess = PreprocessConfig.none});
 
   /// Transcribe raw PCM [samples] (Float32, [-1.0, 1.0]) at [sampleRate] Hz.
   Future<SttResult> transcribeBuffer(
@@ -447,6 +448,8 @@ class SttFlutter {
     int sampleRate, {
     String? language,
     CancellationToken? token,
+    bool beamSearch = false,
+    PreprocessConfig preprocess = PreprocessConfig.none,
   });
 
   /// Release all resources.
@@ -464,8 +467,8 @@ class SttEngine {
     String? defaultLanguage,
   });
 
-  Future<SttResult> transcribeFile(String path, {String? language});
-  Future<SttResult> transcribeBuffer(Float32List samples, int sampleRate, {String? language});
+  Future<SttResult> transcribeFile(String path, {String? language, bool beamSearch = false, PreprocessConfig preprocess = PreprocessConfig.none});
+  Future<SttResult> transcribeBuffer(Float32List samples, int sampleRate, {String? language, bool beamSearch = false, PreprocessConfig preprocess = PreprocessConfig.none});
   void cancel();
   Future<void> destroy();
   bool get isReady;
