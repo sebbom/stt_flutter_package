@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'stt_config.dart';
 import 'default_models/register_defaults.dart';
 
@@ -32,6 +33,26 @@ class ModelFile {
     this.hotwordsScore,
     this.hotwordsString,
   });
+
+  Map<String, dynamic> toJson() => {
+        'url': url,
+        'filename': filename,
+        if (sha256 != null) 'sha256': sha256,
+        if (sizeBytes != null) 'sizeBytes': sizeBytes,
+        if (hotwordsFile != null) 'hotwordsFile': hotwordsFile,
+        if (hotwordsScore != null) 'hotwordsScore': hotwordsScore,
+        if (hotwordsString != null) 'hotwordsString': hotwordsString,
+      };
+
+  factory ModelFile.fromJson(Map<String, dynamic> json) => ModelFile(
+        url: json['url'] as String,
+        filename: json['filename'] as String,
+        sha256: json['sha256'] as String?,
+        sizeBytes: json['sizeBytes'] as int?,
+        hotwordsFile: json['hotwordsFile'] as String?,
+        hotwordsScore: (json['hotwordsScore'] as num?)?.toDouble(),
+        hotwordsString: json['hotwordsString'] as String?,
+      );
 }
 
 /// Describes a speech-to-text model that can be loaded and used for transcription.
@@ -65,6 +86,41 @@ class ModelDescriptor {
     required this.files,
     required this.sizeMb,
   });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'type': type.name,
+        'languages': languages,
+        'files': files.map((f) => f.toJson()).toList(),
+        'sizeMb': sizeMb,
+      };
+
+  factory ModelDescriptor.fromJson(Map<String, dynamic> json) =>
+      ModelDescriptor(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        type: SttModelType.values.firstWhere(
+          (e) => e.name == json['type'],
+          orElse: () =>
+              throw FormatException('Invalid model type: ${json['type']}'),
+        ),
+        languages: (json['languages'] as List<dynamic>).cast<String>(),
+        files: (json['files'] as List<dynamic>)
+            .map((f) => ModelFile.fromJson(f as Map<String, dynamic>))
+            .toList(),
+        sizeMb: json['sizeMb'] as int,
+      );
+
+  /// Serialize to JSON string
+  String toJsonString() => json.encode(toJson());
+
+  /// Deserialize from JSON string
+  static ModelDescriptor fromJsonString(String jsonString) {
+    return ModelDescriptor.fromJson(
+      json.decode(jsonString) as Map<String, dynamic>,
+    );
+  }
 }
 
 /// Registry for speech-to-text models.
