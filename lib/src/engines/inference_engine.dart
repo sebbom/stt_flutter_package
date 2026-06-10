@@ -8,6 +8,7 @@ abstract class InferenceEngine {
     AudioBuffer audio, {
     String? language,
     CancellationToken? token,
+    Map<String, dynamic>? options,
   });
   Future<void> dispose();
 

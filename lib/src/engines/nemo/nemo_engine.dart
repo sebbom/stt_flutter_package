@@ -45,7 +45,14 @@ class NemoInferenceEngine extends OfflineEngineBase {
     AudioBuffer audio, {
     String? language,
     CancellationToken? token,
+    Map<String, dynamic>? options,
   }) async {
+    if (options?['beamSearch'] == true) {
+      SttLogger.w(
+        'Nemo transducer does not support beam search — falling back to greedy.',
+      );
+    }
+
     final stopwatch = Stopwatch()..start();
     final rec = recognizer;
     token?.throwIfCancelled();

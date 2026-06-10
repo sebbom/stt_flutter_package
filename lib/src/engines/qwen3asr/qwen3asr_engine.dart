@@ -74,6 +74,7 @@ class Qwen3AsrInferenceEngine extends OfflineEngineBase {
     AudioBuffer audio, {
     String? language,
     CancellationToken? token,
+    Map<String, dynamic>? options,
   }) async {
     final stopwatch = Stopwatch()..start();
     final rec = recognizer;

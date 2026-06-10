@@ -143,13 +143,14 @@ class SttEngine {
     String path, {
     String? language,
     PreprocessConfig preprocess = PreprocessConfig.none,
+    bool beamSearch = false,
   }) async {
     final stt = _stt;
     if (stt == null) {
       throw SttException.notInitialized('SttEngine');
     }
     return stt.transcribeFile(path,
-        language: language, preprocess: preprocess);
+        language: language, preprocess: preprocess, beamSearch: beamSearch);
   }
 
   Future<SttResult> transcribeBuffer(
@@ -157,13 +158,14 @@ class SttEngine {
     int sampleRate, {
     String? language,
     PreprocessConfig preprocess = PreprocessConfig.none,
+    bool beamSearch = false,
   }) async {
     final stt = _stt;
     if (stt == null) {
       throw SttException.notInitialized('SttEngine');
     }
     return stt.transcribeBuffer(samples, sampleRate,
-        language: language, preprocess: preprocess);
+        language: language, preprocess: preprocess, beamSearch: beamSearch);
   }
 
   /// Set the language-detector fallback (uses a Whisper-tiny SLI model).

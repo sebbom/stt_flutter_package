@@ -20,6 +20,7 @@ class _FakeEngine extends OfflineEngineBase {
     AudioBuffer audio, {
     String? language,
     CancellationToken? token,
+    Map<String, dynamic>? options,
   }) async {
     lastLanguage = language;
     if (scriptedResults.isNotEmpty) {

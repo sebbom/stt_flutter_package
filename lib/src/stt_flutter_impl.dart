@@ -142,6 +142,7 @@ class SttFlutter {
     String? language,
     CancellationToken? token,
     PreprocessConfig preprocess = PreprocessConfig.none,
+    bool beamSearch = false,
   }) async {
     if (!_initialized) throw SttException.notInitialized('SttFlutter');
     final file = File(path);
@@ -150,7 +151,8 @@ class SttFlutter {
     if (audio.samples.isEmpty) {
       throw SttException.invalidArgument('Audio file contains no samples');
     }
-    return _transcribe(audio, language: language, token: token);
+    return _transcribe(audio,
+        language: language, token: token, beamSearch: beamSearch);
   }
 
   /// Transcribes raw audio samples to text.
@@ -172,6 +174,7 @@ class SttFlutter {
     String? language,
     CancellationToken? token,
     PreprocessConfig preprocess = PreprocessConfig.none,
+    bool beamSearch = false,
   }) async {
     if (!_initialized) throw SttException.notInitialized('SttFlutter');
     if (sampleRate <= 0 || sampleRate > 192000) {
@@ -184,13 +187,15 @@ class SttFlutter {
     if (!preprocess.isNoOp) {
       audio = AudioProcessor.applyPreprocess(audio, preprocess);
     }
-    return _transcribe(audio, language: language, token: token);
+    return _transcribe(audio,
+        language: language, token: token, beamSearch: beamSearch);
   }
 
   Future<SttResult> _transcribe(
     AudioBuffer audio, {
     String? language,
     CancellationToken? token,
+    bool beamSearch = false,
   }) async {
     _currentToken = token;
     token?.throwIfCancelled();
@@ -232,6 +237,7 @@ class SttFlutter {
       audio,
       language: effective,
       token: token,
+      options: beamSearch ? {'beamSearch': true} : null,
     );
 
     String? lang = result.lang;
