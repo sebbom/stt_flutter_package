@@ -1,10 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stt_flutter/stt_flutter.dart';
-import 'package:stt_flutter/src/engines/inference_engine.dart';
-import 'package:stt_flutter/src/stt_result.dart';
-import 'package:stt_flutter/src/audio/audio_buffer.dart';
-import 'package:stt_flutter/src/cancellation_token.dart';
 
 // Mock engine for testing
 class MockInferenceEngine implements InferenceEngine {
